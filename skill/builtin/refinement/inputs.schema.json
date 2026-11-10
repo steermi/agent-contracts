@@ -1,0 +1,45 @@
+{
+  "type": "object",
+  "properties": {
+    "focus": {
+      "type": "string",
+      "title": "Focus",
+      "description": "What the team wants out of this session (optional).",
+      "maxLength": 2000,
+      "x-steermi-widget": "textarea"
+    },
+    "items": {
+      "type": "array",
+      "title": "Tickets to refine",
+      "description": "Leave empty and Zoe proposes a queue from the candidate pool.",
+      "maxItems": 20,
+      "items": {
+        "type": "string",
+        "x-steermi-ref": "work_item"
+      }
+    },
+    "pool": {
+      "type": "string",
+      "title": "Candidates",
+      "description": "Work Zoe may queue. Running work (in progress, in review) is never queued unless listed above.",
+      "enum": [
+        "backlog",
+        "backlog_and_planned",
+        "all_open"
+      ],
+      "default": "backlog_and_planned",
+      "x-steermi-enum-titles": [
+        "Backlog only",
+        "Backlog and planned cycles",
+        "All open work"
+      ]
+    },
+    "queue_size": {
+      "type": "integer",
+      "title": "Queue size",
+      "minimum": 1,
+      "maximum": 20,
+      "default": 5
+    }
+  }
+}

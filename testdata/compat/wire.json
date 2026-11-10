@@ -1,0 +1,104 @@
+{
+  "command": {
+    "command": "submit",
+    "command_key": "cmd-2",
+    "expected_version": 3,
+    "input_digest": "a718844cdd9b7c1ddca8ee0302c742a001ca02402be04ed12b60352a402fdd07",
+    "outputs": [
+      {
+        "kind": "repository",
+        "resource_id": "mr-1",
+        "repository_id": "repo-1",
+        "commit_sha": "0123456789abcdef0123456789abcdef01234567"
+      }
+    ],
+    "summary": "Adds retry"
+  },
+  "digests": {
+    "nil": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+    "refs": "563efdc7762198b787984b02f13cd997dd5e0f621848ad516bd59c5ed2a0bfec",
+    "string": "a718844cdd9b7c1ddca8ee0302c742a001ca02402be04ed12b60352a402fdd07"
+  },
+  "evidence_digest": "4341f5a0e0d68c9f75be3293e8541bc830f23b41168af0c43f64cc4093bfbffb",
+  "public_commands": [
+    "continue",
+    "confirm",
+    "retry",
+    "clarify",
+    "take_local",
+    "resume_cloud",
+    "cancel",
+    "submit",
+    "findings",
+    "decision",
+    "revise",
+    "next",
+    "apply_fixes",
+    "refine",
+    "close_meeting",
+    "stop_turn"
+  ],
+  "run": {
+    "subject": {
+      "kind": "work_item",
+      "id": "item-1",
+      "scope_type": "project",
+      "scope_id": "project-1"
+    },
+    "id": "run-1",
+    "project_id": "project-1",
+    "work_item_id": "item-1",
+    "runner": "code",
+    "state": "suggested",
+    "version": 1,
+    "generation": 1,
+    "input_digest": "a718844cdd9b7c1ddca8ee0302c742a001ca02402be04ed12b60352a402fdd07",
+    "inputs": [
+      {
+        "kind": "docs",
+        "resource_id": "page-1",
+        "area_id": "area-1",
+        "revision": "3",
+        "hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      }
+    ],
+    "owner_id": "dev-1",
+    "execution_location": "local",
+    "origin": "manual",
+    "root_id": "run-1",
+    "round": 0,
+    "cost": 0,
+    "output_contract": "code/1",
+    "outputs": [
+      {
+        "kind": "repository",
+        "resource_id": "mr-1",
+        "repository_id": "repo-1",
+        "commit_sha": "0123456789abcdef0123456789abcdef01234567"
+      }
+    ],
+    "checks": [
+      {
+        "repository_id": "repo-1",
+        "commit_sha": "0123456789abcdef0123456789abcdef01234567",
+        "name": "ci",
+        "provider_run_id": "p-1",
+        "attempt": 1,
+        "status": "success",
+        "provenance": "provider_verified",
+        "started_at": "2026-10-20T12:00:00Z"
+      }
+    ],
+    "policy": {
+      "required_checks": [
+        "ci"
+      ],
+      "require_acceptance": false,
+      "quorum": 0,
+      "max_repair_rounds": 6,
+      "max_cost": 20
+    },
+    "created_at": "2026-10-20T12:00:00Z",
+    "updated_at": "2026-10-20T12:00:00Z"
+  }
+}

@@ -1,0 +1,38 @@
+{
+  "identity_digest": "f1313b90291c55d21702bd165ec8681aa8d81e000d65b0594fd5991b649fd289",
+  "runners": {
+    "answer": {
+      "scopes": [
+        "organization",
+        "workspace",
+        "project",
+        "team"
+      ],
+      "execution_locations": [
+        "cloud",
+        "local"
+      ]
+    },
+    "code": {
+      "scopes": [
+        "project"
+      ],
+      "execution_locations": [
+        "cloud",
+        "local"
+      ]
+    },
+    "findings": {
+      "scopes": [
+        "organization",
+        "workspace",
+        "project",
+        "team"
+      ],
+      "execution_locations": [
+        "cloud",
+        "local"
+      ]
+    }
+  }
+}

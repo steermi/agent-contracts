@@ -1,0 +1,20 @@
+{
+  "branches": {
+    "bug": "fix/STE-7-crash-nil-pointer-in-sync",
+    "chore": "chore/STE-9",
+    "feature": "feat/STE-123-add-retry-to-the-importer",
+    "long": "feat/STE-11-a-very-long-title-that-keeps-going-well-past-the",
+    "separator": "feat/STE-13-etc-passwd",
+    "shell": "feat/STE-12-rm-rf-id-echo",
+    "unicode": "feat/STE-10-zazolc-gesla-jazn"
+  },
+  "hash_secret": "ee46551742ec5ae6c3d1f629e9b886b0e87f917fe87fa610a329c60404e31de4",
+  "public_ids": {
+    " lx_7Q4XK2M9ab": false,
+    "LX_7Q4XK2M9ab": false,
+    "lx_7Q4XK2M9a": false,
+    "lx_7Q4XK2M9a!": false,
+    "lx_7Q4XK2M9ab": true,
+    "lx_7Q4XK2M9ab\n": false
+  }
+}

@@ -1,0 +1,28 @@
+{
+  "type": "object",
+  "required": ["cycle", "votes"],
+  "properties": {
+    "cycle": {
+      "type": "string",
+      "title": "Cycle",
+      "description": "The completed cycle to look back on.",
+      "x-steermi-ref": "cycle",
+      "x-steermi-status": ["completed"],
+      "default": "$latest_completed"
+    },
+    "format": {
+      "$ref": "board#/columns",
+      "title": "Format",
+      "x-steermi-presets": ["went_well_improve_questions", "start_stop_continue", "four_ls", "mad_sad_glad"],
+      "x-steermi-custom": true,
+      "default": {"preset": "went_well_improve_questions"}
+    },
+    "votes": {
+      "type": "integer",
+      "title": "Votes per person",
+      "minimum": 1,
+      "maximum": 10,
+      "default": 3
+    }
+  }
+}

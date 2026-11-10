@@ -1,0 +1,18 @@
+version: 1
+columns_min: 1
+columns_max: 6
+columns:
+  - {key: went_well, name: Went well, prompt: "What went well this cycle?", color: green}
+  - {key: improve, name: Improve, prompt: "What should we improve?", color: amber}
+  - {key: questions, name: Questions, prompt: "What is still unclear?", color: blue}
+card:
+  max_length: 2000
+phases:
+  - {key: collect, name: Write, visibility: private, allow: [add, edit_own, delete_own]}
+  - {key: group, name: Group, allow: [group], zoe: suggest_groups}
+  - {key: vote, name: Vote, allow: [vote], budget: inputs.votes}
+  - {key: actions, name: Actions, allow: [act], zoe: suggest_actions}
+  - {key: recap, name: Recap, zoe: summarize}
+apply:
+  - work_items
+  - docs_page

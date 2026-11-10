@@ -1,0 +1,213 @@
+{
+  "builtin_digests": {
+    "steermi:build": "382133aea6798b80af632aa48d832ebd2fc8fd72352458f7a5888d7a39de0374",
+    "steermi:initiative-planning": "a9ebf23ab08a7b3dfea622a3079856de6f68917e5a6e206ca747a1a2d8552d2f",
+    "steermi:org-design": "aa3f6adad5abd9f9bb4497155e5122d14ef37f098613f3618c4b1d4ea02074eb",
+    "steermi:plan": "27db711d7a3626426cf3120888a7e3a546f1485fd32f33c0aae379d1837ce080",
+    "steermi:project-discovery": "f31146587d5e1222278c3e8fff4d652af293607ace4227a90adefd12817eb802",
+    "steermi:project-documentation": "e3ee40789f24ab41681c3404b336062cfaae65140a2e7fe3573db0838b7dcfa8",
+    "steermi:refinement": "65d5ba37f3d2822a2c4f7acb90db3686a287dffbf3069db6ed2f8c77ae9ad670",
+    "steermi:retro": "2870dd50ffc331ad5e787163b7df7ac075591c463f0e3323beb042770e801e35",
+    "steermi:review": "3a8fc8af2affc6358776a8408f6517ecc772a367ba4187c703043694744b0d92",
+    "steermi:sprint-planning": "326503df87d6ef3b9e95f4dd0f6f348b9437d9541227d84df21756ae1e530bcc",
+    "steermi:work-planning": "0f364b3e0d7b75c6afe51b1a6611ad7df4ce87dc9da11b4c6b6e89d8482bcfd5"
+  },
+  "builtin_results": {
+    "steermi:build": {
+      "result": "code",
+      "runner": "code",
+      "starts_from": [
+        "work_item"
+      ]
+    },
+    "steermi:initiative-planning": {
+      "result": "initiative-planning",
+      "runner": "answer",
+      "starts_from": [
+        "organization"
+      ]
+    },
+    "steermi:org-design": {
+      "result": "org-design",
+      "runner": "answer",
+      "starts_from": [
+        "organization"
+      ]
+    },
+    "steermi:plan": {
+      "result": "answer",
+      "runner": "answer",
+      "starts_from": [
+        "organization",
+        "workspace",
+        "team",
+        "project",
+        "work_item"
+      ]
+    },
+    "steermi:project-discovery": {
+      "result": "project-discovery",
+      "runner": "answer",
+      "starts_from": [
+        "project"
+      ]
+    },
+    "steermi:project-documentation": {
+      "result": "project-documentation",
+      "runner": "answer",
+      "starts_from": [
+        "project"
+      ]
+    },
+    "steermi:refinement": {
+      "result": "refinement",
+      "runner": "answer",
+      "starts_from": [
+        "team"
+      ]
+    },
+    "steermi:retro": {
+      "result": "board",
+      "runner": "answer",
+      "starts_from": [
+        "team"
+      ]
+    },
+    "steermi:review": {
+      "result": "findings",
+      "runner": "findings",
+      "starts_from": [
+        "work_item"
+      ]
+    },
+    "steermi:sprint-planning": {
+      "result": "sprint-planning",
+      "runner": "answer",
+      "starts_from": [
+        "team"
+      ]
+    },
+    "steermi:work-planning": {
+      "result": "work-planning",
+      "runner": "answer",
+      "starts_from": [
+        "project"
+      ]
+    }
+  },
+  "builtin_version": "0.8.0",
+  "default_flow": {
+    "start": "plan",
+    "nodes": [
+      {
+        "key": "plan",
+        "type": "agent",
+        "name": "Plan",
+        "skill": "steermi:plan",
+        "requires": {}
+      },
+      {
+        "key": "quality",
+        "type": "loop",
+        "name": "Quality loop",
+        "requires": {},
+        "body": [
+          "build",
+          "review"
+        ],
+        "loop": {
+          "max_iterations": 3,
+          "stop_below": "high",
+          "stall_rounds": 2
+        }
+      },
+      {
+        "key": "build",
+        "type": "agent",
+        "name": "Build",
+        "skill": "steermi:build",
+        "requires": {},
+        "triggers": [
+          {
+            "from_status": "todo",
+            "to_status": "in_progress",
+            "item_type": "*",
+            "mode": "ask"
+          }
+        ]
+      },
+      {
+        "key": "review",
+        "type": "agent",
+        "name": "Review",
+        "skill": "steermi:review",
+        "requires": {},
+        "triggers": [
+          {
+            "from_status": "in_progress",
+            "to_status": "in_review",
+            "item_type": "*",
+            "mode": "ask"
+          }
+        ]
+      },
+      {
+        "key": "in_review",
+        "type": "status",
+        "name": "In review",
+        "requires": {},
+        "status": {
+          "category": "in_review"
+        }
+      },
+      {
+        "key": "owner",
+        "type": "approval",
+        "name": "Owner decides",
+        "requires": {}
+      },
+      {
+        "key": "end",
+        "type": "end",
+        "name": "End",
+        "requires": {}
+      }
+    ],
+    "edges": [
+      {
+        "from": "plan",
+        "to": "quality",
+        "on": "done",
+        "start": "ask"
+      },
+      {
+        "from": "build",
+        "to": "review",
+        "on": "done",
+        "start": "ask"
+      },
+      {
+        "from": "review",
+        "to": "build",
+        "on": "changes_requested",
+        "start": "ask"
+      },
+      {
+        "from": "review",
+        "to": "in_review",
+        "on": "approved"
+      },
+      {
+        "from": "quality",
+        "to": "owner",
+        "on": "exhausted"
+      },
+      {
+        "from": "in_review",
+        "to": "end",
+        "on": "done"
+      }
+    ]
+  },
+  "default_flow_digest": "995702d4f581e42eb3f23680b4b74a14b8b2578182763e952e17354e83aa9430"
+}

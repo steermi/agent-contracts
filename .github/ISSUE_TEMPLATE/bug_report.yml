@@ -1,0 +1,42 @@
+name: Bug report
+description: Something does not work as documented.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting. Do not paste tokens, credentials, private
+        transcripts or customer data. Synthetic examples are enough.
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: the module version from `go.mod` of your consumer (`go list -m github.com/steermi/agent-contracts`)
+    validations:
+      required: true
+  - type: input
+    id: environment
+    attributes:
+      label: Environment
+      description: Operating system and architecture, agent host and version (for example Claude Code 2.x).
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: The exact commands or prompts, starting from a clean state if you can.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected and actual behavior
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Logs or output
+      description: Relevant, redacted output. It is formatted as code automatically.
+      render: text
