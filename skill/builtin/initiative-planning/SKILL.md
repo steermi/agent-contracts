@@ -4,6 +4,7 @@ description: "Steermi's built-in Initiative planning. Break an initiative into p
 license: Apache-2.0
 metadata:
   steermi-result: initiative-planning
+  steermi-effort: medium
   steermi-category: plan
   steermi-icon: target
 ---

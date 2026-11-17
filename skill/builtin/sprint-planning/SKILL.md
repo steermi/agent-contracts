@@ -4,6 +4,7 @@ description: "Steermi's built-in Cycle planning. Plan a team cycle with Zoe: res
 license: Apache-2.0
 metadata:
   steermi-result: sprint-planning
+  steermi-effort: medium
   steermi-audience: group
   steermi-category: team_rituals
   steermi-icon: calendar-range

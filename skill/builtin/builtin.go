@@ -26,7 +26,7 @@ import (
 
 // Version identifies the built-in skill content. Bump it with every content
 // change and add a Changelog line.
-const Version = "0.8.0"
+const Version = "0.9.0"
 
 // Prefix marks built-in skill identities ("steermi:plan", the plugin:skill
 // form of Claude Code; URL-safe, so built-ins share the skill routes).
@@ -34,6 +34,7 @@ const Prefix = "steermi:"
 
 // Changelog lists what changed per version, newest first.
 var Changelog = []Change{
+	{Version: "0.9.0", Note: "Org design, Initiative planning and Cycle planning declare medium effort (steermi-effort): Steermi raises a lighter default effort to medium for these runs."},
 	{Version: "0.8.0", Note: "Refinement takes a start form (focus, tickets, candidate pool, queue size) and queues only from the eligible pool Steermi computes; refined items are remembered."},
 	{Version: "0.7.0", Note: "Initiative planning: break an initiative into per-team epics with cross-team dependencies; in chats Zoe can read initiatives (get_initiative)."},
 	{Version: "0.6.0", Note: "Refinement, Cycle planning and Research use work item links: they check dependencies and duplicates, propose blocks/duplicates links and order cycles by dependency."},

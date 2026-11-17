@@ -7,6 +7,13 @@ API).
 
 ## Unreleased
 
+### Changed
+
+- `skill/builtin` 0.9.0: `steermi:org-design`, `steermi:initiative-planning`
+  and `steermi:sprint-planning` declare `steermi-effort: medium`, so a host
+  that floors effort by the skill (Steermi cloud runs) gives them at least
+  medium while lighter skills keep the organization's default.
+
 ## 0.1.0 - 2026-11-10
 
 First public release.

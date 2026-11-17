@@ -4,6 +4,7 @@ description: "Steermi's built-in Org design. Design the organization's workspace
 license: Apache-2.0
 metadata:
   steermi-result: org-design
+  steermi-effort: medium
   steermi-category: organization
   steermi-icon: network
 ---

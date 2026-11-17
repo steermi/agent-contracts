@@ -1,15 +1,15 @@
 {
   "builtin_digests": {
     "steermi:build": "382133aea6798b80af632aa48d832ebd2fc8fd72352458f7a5888d7a39de0374",
-    "steermi:initiative-planning": "a9ebf23ab08a7b3dfea622a3079856de6f68917e5a6e206ca747a1a2d8552d2f",
-    "steermi:org-design": "aa3f6adad5abd9f9bb4497155e5122d14ef37f098613f3618c4b1d4ea02074eb",
+    "steermi:initiative-planning": "2386db67ae42718a17bf13b218b27655494cc0c683f2ad9ebebc7d4fd1bfabd5",
+    "steermi:org-design": "b44b0c5a0996ef2a2905d63163fc4bd9c58bd7f70f1d414fb4f9e3082e70b792",
     "steermi:plan": "27db711d7a3626426cf3120888a7e3a546f1485fd32f33c0aae379d1837ce080",
     "steermi:project-discovery": "f31146587d5e1222278c3e8fff4d652af293607ace4227a90adefd12817eb802",
     "steermi:project-documentation": "e3ee40789f24ab41681c3404b336062cfaae65140a2e7fe3573db0838b7dcfa8",
     "steermi:refinement": "65d5ba37f3d2822a2c4f7acb90db3686a287dffbf3069db6ed2f8c77ae9ad670",
     "steermi:retro": "2870dd50ffc331ad5e787163b7df7ac075591c463f0e3323beb042770e801e35",
     "steermi:review": "3a8fc8af2affc6358776a8408f6517ecc772a367ba4187c703043694744b0d92",
-    "steermi:sprint-planning": "326503df87d6ef3b9e95f4dd0f6f348b9437d9541227d84df21756ae1e530bcc",
+    "steermi:sprint-planning": "9afadde50d893347b2407b6ec310267c4c397e24fce29dfe87191839231d68c6",
     "steermi:work-planning": "0f364b3e0d7b75c6afe51b1a6611ad7df4ce87dc9da11b4c6b6e89d8482bcfd5"
   },
   "builtin_results": {
@@ -95,7 +95,7 @@
       ]
     }
   },
-  "builtin_version": "0.8.0",
+  "builtin_version": "0.9.0",
   "default_flow": {
     "start": "plan",
     "nodes": [
