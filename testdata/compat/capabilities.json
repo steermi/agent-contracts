@@ -1,4 +1,29 @@
 {
+  "doc_page": {
+    "answer": [
+      "ask_questions",
+      "get_doc_area",
+      "get_doc_page",
+      "manage_todo_list",
+      "read_skill_file",
+      "report_instruction_conflict",
+      "submit_activity_outputs",
+      "update_doc_page",
+      "web_fetch",
+      "web_search"
+    ],
+    "findings": [
+      "ask_questions",
+      "get_doc_area",
+      "get_doc_page",
+      "manage_todo_list",
+      "read_skill_file",
+      "report_instruction_conflict",
+      "submit_review_findings",
+      "web_fetch",
+      "web_search"
+    ]
+  },
   "meeting": [
     "get_linked_work_items",
     "get_team_info",

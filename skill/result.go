@@ -20,6 +20,17 @@ const StartsFromKey = "steermi-starts-from"
 // It is a suggestion (package hint), never a model name.
 const EffortKey = "steermi-effort"
 
+// SourcesKey asks the host to pin extra sources on the skill's runs (comma
+// separated, see Skill.Sources). Optional; unknown values are ignored so a
+// newer skill still loads on an older host.
+const SourcesKey = "steermi-sources"
+
+// SourceRelatedDocs pins the docs pages related to a docs page run's subject
+// page (as the starter can read them) as inputs.
+const SourceRelatedDocs = "related-docs"
+
+var knownSources = []string{SourceRelatedDocs}
+
 // Presentation metadata, read by launchers and catalogs only.
 const (
 	AudienceKey = "steermi-audience" // solo (default) | group
@@ -65,12 +76,14 @@ const (
 	SubjectTeam         = "team"
 	SubjectProject      = "project"
 	SubjectWorkItem     = "work_item"
+	// SubjectDocPage: a docs page (answer and findings skills, cloud only).
+	SubjectDocPage = "doc_page"
 )
 
 var (
 	deliveryResults  = []Result{ResultAnswer, ResultCode, ResultFindings}
 	workspaceResults = []Result{ResultBoard, ResultRefinement, ResultCyclePlanning, ResultOrgDesign, ResultProjectDiscovery, ResultProjectDocumentation, ResultResearch, ResultInitiativePlanning}
-	allSubjects      = []string{SubjectOrganization, SubjectWorkspace, SubjectTeam, SubjectProject, SubjectWorkItem}
+	allSubjects      = []string{SubjectOrganization, SubjectWorkspace, SubjectTeam, SubjectProject, SubjectWorkItem, SubjectDocPage}
 )
 
 // Results lists every result, delivery results first.
@@ -100,8 +113,10 @@ func (r Result) Subjects() []string {
 	switch r {
 	case ResultAnswer:
 		return slices.Clone(allSubjects)
-	case ResultCode, ResultFindings:
+	case ResultCode:
 		return []string{SubjectWorkItem}
+	case ResultFindings:
+		return []string{SubjectWorkItem, SubjectDocPage}
 	case ResultBoard, ResultRefinement, ResultCyclePlanning:
 		return []string{SubjectTeam}
 	case ResultOrgDesign, ResultInitiativePlanning:
@@ -113,7 +128,8 @@ func (r Result) Subjects() []string {
 }
 
 // InFlows reports whether a skill with this result can be a flow step. Flow
-// steps run on a work item; workspace sessions are not flow steps yet.
+// steps run on a work item or a docs page (flow.Graph.Subject); workspace
+// sessions are not flow steps yet.
 func (r Result) InFlows() bool { return slices.Contains(deliveryResults, r) }
 
 // Result is what the manifest's skill hands back, answer when unset.
@@ -165,6 +181,22 @@ func (s Skill) StartsFrom() []string {
 	m, _, _ := s.Manifest()
 	return m.StartsFrom()
 }
+
+// Sources lists the known extra sources the skill asks the host to pin
+// (metadata steermi-sources), in declared order; unknown values are dropped.
+func (s Skill) Sources() []string {
+	m, _, _ := s.Manifest()
+	var out []string
+	for _, v := range splitList(m.Metadata[SourcesKey]) {
+		if slices.Contains(knownSources, v) && !slices.Contains(out, v) {
+			out = append(out, v)
+		}
+	}
+	return out
+}
+
+// WantsSource reports whether the skill asks for source.
+func (s Skill) WantsSource(source string) bool { return slices.Contains(s.Sources(), source) }
 
 // CanStart reports whether the skill can start from subject.
 func (s Skill) CanStart(subject string) bool { return slices.Contains(s.StartsFrom(), subject) }

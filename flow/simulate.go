@@ -15,6 +15,11 @@ import (
 // revision.
 const SameAsBefore = "same"
 
+// CheckFailed scripts a code step whose required checks failed (the same
+// failed job on every visit). Inside a loop it starts a failed-check round
+// (LoopPolicy.OnFailedCheck); elsewhere the step repeats.
+const CheckFailed = "check_failed"
+
 // MaxSimulatedSteps bounds a simulation.
 const MaxSimulatedSteps = 40
 
@@ -22,6 +27,40 @@ const MaxSimulatedSteps = 40
 // SameAsBefore); the last entry repeats. Unscripted steps succeed (done,
 // approved for reviews).
 type Script map[string][]string
+
+// MaxScriptedVisits bounds the visits scripted for one step.
+const MaxScriptedVisits = 10
+
+// ValidScripted reports whether o may be scripted for a visit: an edge
+// outcome a run can have, SameAsBefore or CheckFailed. Hosts validate scripts
+// with Script.Valid and never restate the list.
+func ValidScripted(o string) bool {
+	switch o {
+	case SameAsBefore, CheckFailed, string(activity.OutcomeDone), string(activity.OutcomeApproved),
+		string(activity.OutcomeChangesRequested), string(activity.OutcomeFailed):
+		return true
+	}
+	return false
+}
+
+// Valid reports whether every step's visits are bounded and scripted with
+// ValidScripted outcomes (step keys are checked against the graph by hosts).
+func (s Script) Valid() bool {
+	if len(s) > MaxNodes {
+		return false
+	}
+	for _, visits := range s {
+		if len(visits) > MaxScriptedVisits {
+			return false
+		}
+		for _, o := range visits {
+			if !ValidScripted(o) {
+				return false
+			}
+		}
+	}
+	return true
+}
 
 // SimStep is one simulated run.
 type SimStep struct {
@@ -72,7 +111,7 @@ func (g Resolved) Simulate(script Script, from string, perRun float64) SimResult
 			out.Ends, out.EndKind = hop.Stop, g.endKind(hop)
 			return out
 		}
-		ref, ok := g.Ref("simulation", hop.Node, prev)
+		ref, ok := g.RefVia("simulation", hop.Node, prev, activity.Next)
 		if !ok {
 			out.EndKind = SimOpen
 			return out
@@ -87,7 +126,11 @@ func (g Resolved) Simulate(script Script, from string, perRun float64) SimResult
 		if scripted != SameAsBefore || findings[hop.Node] == "" {
 			findings[hop.Node] = fmt.Sprintf("finding of visit %d", visit)
 		}
-		r := simulatedRun(hop.Runner, scripted, findings[hop.Node], revision, out.Cost, &ref)
+		var checks []string
+		if n, ok := g.Node(hop.Node); ok {
+			checks = n.Requires.Checks
+		}
+		r := simulatedRun(hop.Runner, scripted, findings[hop.Node], revision, out.Cost, &ref, checks)
 		next, stop, ok := r.FlowNext()
 		step := SimStep{Node: hop.Node, Outcome: r.Outcome(), Cost: out.Cost, Stop: stop}
 		if ref.Loop != nil {
@@ -129,10 +172,20 @@ func scriptedOutcome(list []string, visit int, runner activity.Runner) string {
 
 // simulatedRun is a finished run with the given outcome: a finding at the
 // highest severity requests changes, revision numbers the code output.
-func simulatedRun(runner activity.Runner, outcome, finding string, revision int, cost float64, ref *activity.FlowRef) activity.Run {
+func simulatedRun(runner activity.Runner, outcome, finding string, revision int, cost float64, ref *activity.FlowRef, checks []string) activity.Run {
 	r := activity.Run{ID: "simulated-" + ref.Node, Runner: runner, State: activity.Submitted, Cost: cost, Flow: ref}
 	if runner == activity.Code {
-		r.Outputs = []activity.OutputRef{{Kind: activity.RefRepository, ResourceID: "repo", RepositoryID: "repo", CommitSHA: fmt.Sprintf("%040x", revision)}}
+		sha := fmt.Sprintf("%040x", revision)
+		r.Outputs = []activity.OutputRef{{Kind: activity.RefRepository, ResourceID: "repo", RepositoryID: "repo", CommitSHA: sha}}
+		r.Policy.RequiredChecks = checks
+		for i, name := range checks {
+			status, jobs := activity.CheckSuccess, []string(nil)
+			if outcome == CheckFailed && i == 0 {
+				status, jobs = activity.CheckFailed, []string{"test"}
+			}
+			r.Checks = append(r.Checks, activity.Check{RepositoryID: "repo", CommitSHA: sha, Name: name, ProviderRunID: "sim", Attempt: 1,
+				Status: status, Provenance: activity.ProviderVerified, FailedJobs: jobs})
+		}
 	}
 	switch activity.Outcome(outcome) {
 	case activity.OutcomeFailed:

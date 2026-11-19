@@ -3,6 +3,7 @@ package contracts_test
 import (
 	"encoding/json"
 	"flag"
+	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
@@ -80,7 +81,8 @@ func TestCompatCapabilities(t *testing.T) {
 			caps[name][scope] = sorted(activity.CapabilitiesFor(k, scope))
 		}
 	}
-	golden(t, "capabilities", map[string]any{"runners": caps, "meeting": sorted(activity.CapabilitiesForMeeting())})
+	golden(t, "capabilities", map[string]any{"runners": caps, "meeting": sorted(activity.CapabilitiesForMeeting()),
+		"doc_page": map[string][]string{"answer": sorted(activity.CapabilitiesForDocPage(activity.Answer)), "findings": sorted(activity.CapabilitiesForDocPage(activity.Findings))}})
 }
 
 func TestCompatCapabilityDenials(t *testing.T) {
@@ -265,4 +267,202 @@ func TestCompatSkillsAndFlows(t *testing.T) {
 		results[id] = map[string]any{"result": s.Result(), "runner": s.Runner(), "starts_from": s.StartsFrom()}
 	}
 	golden(t, "skills_flows", map[string]any{"builtin_version": builtin.Version, "builtin_digests": skills, "builtin_results": results, "default_flow": flow.Default(), "default_flow_digest": flow.Default().Digest()})
+}
+
+// Docs page runs, the default docs page flow and findings that name a target
+// are locked like the work item contracts.
+func TestCompatDocPage(t *testing.T) {
+	owner := activity.Actor{OrgID: "org-1", UserID: "dev-1", Role: "member"}
+	subject := activity.Subject{Kind: activity.SubjectDocPage, ID: "page-1", ScopeType: "organization", ScopeID: "org-1"}
+	r, err := activity.NewRun("run-1", "org-1", "", "", owner, activity.Request{
+		Runner: activity.Findings, Location: activity.Cloud, InputDigest: activity.Digest("page-1@3"), Subject: subject,
+		Inputs: []activity.OutputRef{docs}, CommandKey: "cmd-1", Origin: "manual",
+	}, nil)
+	require.NoError(t, err)
+	r.CreatedAt, r.UpdatedAt = at, at
+	require.NoError(t, r.Apply(owner, activity.Command{Type: activity.Confirm, ExpectedVersion: r.Version}))
+	require.NoError(t, r.Apply(owner, activity.Command{Type: activity.Start, ExpectedVersion: r.Version}))
+	finding := activity.Finding{
+		ID: "f-1", Severity: activity.High, Location: "Deploys", Description: "Contradicts the release runbook",
+		Target:       &activity.FindingTarget{Type: activity.FindingTargetDocPage, ID: "page-2", Version: "7"},
+		SubjectQuote: "Deploys run on Fridays", TargetQuote: "Never deploy on Fridays",
+		Suggestion: &activity.FindingSuggestion{Action: activity.SuggestMarkSuperseded, Rationale: "The runbook is newer"},
+	}
+	require.NoError(t, r.Apply(owner, activity.Command{Type: activity.SubmitFindings, ExpectedVersion: r.Version, Summary: "One conflict", Recommendation: activity.ChangesRequested, Findings: []activity.Finding{finding}}))
+	r.UpdatedAt = at
+	assert.ErrorIs(t, r.Apply(owner, activity.Command{Type: activity.TakeLocal, ExpectedVersion: r.Version}), activity.ErrForbidden)
+
+	// system:doc:1 was the default docs page flow when this corpus was cut;
+	// it stays resolvable under its version for runs that pin it.
+	doc, ok := flow.BuiltinGraph(flow.DocVersionV1)
+	require.True(t, ok)
+	triggered := flow.Graph{
+		Subject: flow.SubjectDocPage, Start: "draft",
+		Nodes: []flow.Node{
+			{Key: "draft", Type: flow.NodeAgent, Name: "Draft", Skill: "steermi:plan", PageTriggers: []activity.PageTrigger{{Event: activity.PageEventUpdated, Mode: flow.ModeAsk}}},
+			{Key: "check", Type: flow.NodeAgent, Name: "Check", Skill: "steermi:review", PageTriggers: []activity.PageTrigger{{Event: activity.PageEventPublished, Mode: flow.ModeAuto}}},
+			{Key: "end", Type: flow.NodeEnd},
+		},
+		Edges: []flow.Edge{
+			{From: "draft", To: "check", On: activity.OutcomeDone, Start: flow.ModeAsk},
+			{From: "check", To: "end", On: activity.OutcomeApproved},
+		},
+	}
+	resolvedTriggered, issues := triggered.Resolve(nil)
+	require.Empty(t, issues)
+	require.NoError(t, resolvedTriggered.Validate(flow.Options{}))
+	golden(t, "doc_page", map[string]any{
+		"run":                      r,
+		"evidence_digest":          r.EvidenceDigest(),
+		"capabilities":             sorted(r.Capabilities),
+		"default_flow":             doc,
+		"default_flow_version":     flow.DocVersionV1,
+		"default_flow_digest":      doc.Digest(),
+		"work_item_default_digest": flow.DefaultFor("").Digest(),
+		"triggered_flow":           triggered,
+		"triggered_flow_digest":    triggered.Digest(),
+	})
+}
+
+// The second default docs page flow (system:doc:2: Docs reconcile → ask →
+// Docs fix) and its skills are locked like the first; system:doc:1 keeps its
+// own golden in doc_page.json.
+func TestCompatDocPageV2(t *testing.T) {
+	doc := flow.DefaultFor(flow.SubjectDocPage)
+	pinned, ok := flow.BuiltinGraph(flow.DefaultDocVersion)
+	require.True(t, ok)
+	require.Equal(t, doc, pinned)
+	r, issues := doc.Resolve(nil)
+	require.Empty(t, issues)
+	require.NoError(t, r.Validate(flow.Options{}))
+	reconcile, ok := r.Ref(flow.DefaultDocVersion, "reconcile", nil)
+	require.True(t, ok)
+	fix, ok := r.Ref(flow.DefaultDocVersion, "fix", nil)
+	require.True(t, ok)
+	skills := map[string]any{}
+	for _, id := range []string{"steermi:docs-reconcile", "steermi:docs-fix"} {
+		s, ok := builtin.Get(id)
+		require.True(t, ok)
+		skills[id] = map[string]any{"digest": s.Digest(), "result": s.Result(), "runner": s.Runner(), "starts_from": s.StartsFrom(), "effort": s.Effort(), "sources": s.Sources(), "required": builtin.Required(id)}
+	}
+	golden(t, "doc_page_v2", map[string]any{
+		"default_flow":         doc,
+		"default_flow_version": flow.DefaultVersionFor(flow.SubjectDocPage),
+		"default_flow_digest":  doc.Digest(),
+		"page_rules":           r.PageRules(),
+		"reconcile_ref":        reconcile,
+		"fix_ref":              fix,
+		"skills":               skills,
+	})
+}
+
+// A docs page findings run whose host dropped findings with unverifiable
+// quotes records the count (dropped_findings); runs that dropped nothing
+// keep their earlier shape (doc_page.json is unchanged).
+func TestCompatDroppedFindings(t *testing.T) {
+	owner := activity.Actor{OrgID: "org-1", UserID: "dev-1", Role: "member"}
+	subject := activity.Subject{Kind: activity.SubjectDocPage, ID: "page-1", ScopeType: "organization", ScopeID: "org-1"}
+	r, err := activity.NewRun("run-1", "org-1", "", "", owner, activity.Request{
+		Runner: activity.Findings, Location: activity.Cloud, InputDigest: activity.Digest("page-1@3"), Subject: subject,
+		Inputs: []activity.OutputRef{docs}, CommandKey: "cmd-1", Origin: "manual",
+	}, nil)
+	require.NoError(t, err)
+	r.CreatedAt, r.UpdatedAt = at, at
+	require.NoError(t, r.Apply(owner, activity.Command{Type: activity.Confirm, ExpectedVersion: r.Version}))
+	require.NoError(t, r.Apply(owner, activity.Command{Type: activity.Start, ExpectedVersion: r.Version}))
+	require.NoError(t, r.Apply(owner, activity.Command{Type: activity.SubmitFindings, ExpectedVersion: r.Version, Summary: "Quotes not found", Recommendation: activity.Inconclusive, DroppedFindings: 2}))
+	r.UpdatedAt = at
+	golden(t, "dropped_findings", map[string]any{
+		"run":             r,
+		"evidence_digest": r.EvidenceDigest(),
+	})
+}
+
+// A person dismisses one finding of a docs page findings run
+// (dismiss_finding): the command's wire shape, the run with the dismissal
+// reason and its evidence digest, which equals the digest before dismissal.
+func TestCompatDismissFinding(t *testing.T) {
+	owner := activity.Actor{OrgID: "org-1", UserID: "dev-1", Role: "member"}
+	subject := activity.Subject{Kind: activity.SubjectDocPage, ID: "page-1", ScopeType: "organization", ScopeID: "org-1"}
+	r, err := activity.NewRun("run-1", "org-1", "", "", owner, activity.Request{
+		Runner: activity.Findings, Location: activity.Cloud, InputDigest: activity.Digest("page-1@3"), Subject: subject,
+		Inputs: []activity.OutputRef{docs}, CommandKey: "cmd-1", Origin: "manual",
+	}, nil)
+	require.NoError(t, err)
+	r.CreatedAt, r.UpdatedAt = at, at
+	require.NoError(t, r.Apply(owner, activity.Command{Type: activity.Confirm, ExpectedVersion: r.Version}))
+	require.NoError(t, r.Apply(owner, activity.Command{Type: activity.Start, ExpectedVersion: r.Version}))
+	require.NoError(t, r.Apply(owner, activity.Command{Type: activity.SubmitFindings, ExpectedVersion: r.Version, Summary: "One contradiction",
+		Recommendation: activity.ChangesRequested, Findings: []activity.Finding{
+			{ID: "f-1", Severity: activity.High, Description: "Retention period differs"},
+			{ID: "f-2", Severity: activity.Low, Description: "Duplicate paragraph"},
+		}}))
+	before := r.EvidenceDigest()
+	cmd := activity.Command{Type: activity.DismissFinding, CommandKey: "cmd-5", ExpectedVersion: r.Version, FindingID: "f-2", Reason: "Applied"}
+	require.NoError(t, r.Apply(owner, cmd))
+	r.UpdatedAt = at
+	require.Equal(t, before, r.EvidenceDigest())
+	golden(t, "dismiss_finding", map[string]any{
+		"command":          cmd,
+		"run":              r,
+		"evidence_digest":  r.EvidenceDigest(),
+		"allowed_commands": r.AllowedCommands(owner),
+	})
+}
+
+// A run placed by a host's flow assignment rule carries the rule and the
+// split arm on its flow ref (rule, arm), and its successors keep them.
+// Unattributed refs keep their earlier shape (no rule/arm keys), so stored
+// runs and every digest are unchanged.
+func TestCompatFlowAttribution(t *testing.T) {
+	g := flow.DefaultResolved()
+	plan, ok := g.Ref("v1", "plan", nil)
+	require.True(t, ok)
+	unattributed := plan
+	plan.Rule, plan.Arm = "rule-1", "fast"
+	build, ok := g.Ref("v1", "build", &activity.Run{Runner: activity.Answer, Flow: &plan})
+	require.True(t, ok)
+	golden(t, "flow_attribution", map[string]any{
+		"unattributed": unattributed,
+		"placed":       plan,
+		"successor":    build,
+	})
+}
+
+// Quality loops on evidence: a code step with required checks inside a loop
+// pins a failed-check round (hop "repeat", back), every in-loop successor
+// carries the round ledger, and checks carry their details. A run placed
+// without them (old refs, loops without checks) keeps its shape: no repeat
+// hop, no ledger key, and today's repeat behaviour.
+func TestCompatLoopLedger(t *testing.T) {
+	sha := func(n int) string { return fmt.Sprintf("%040x", n) }
+	old := flow.DefaultResolved()
+	oldBuild, ok := old.Ref("v1", "build", nil)
+	require.True(t, ok)
+
+	g := flow.Default()
+	g.Nodes[2].Requires.Checks = []string{"ci"}
+	g.Nodes[1].Loop.StallMatch = activity.StallLocation
+	g.Nodes[1].Loop.OnFailedCheck = activity.FailedCheckAuto
+	checked, _ := g.Resolve(nil)
+	build, ok := checked.Ref("v1", "build", nil)
+	require.True(t, ok)
+	red := activity.Run{ID: "b1", Runner: activity.Code, State: activity.Submitted, Version: 1, OwnerID: "o", Location: activity.Cloud, Flow: &build,
+		Cost: 1.5, Tried: "reorder auth middleware", Policy: activity.Policy{RequiredChecks: []string{"ci"}},
+		Outputs: []activity.OutputRef{{Kind: activity.RefRepository, ResourceID: "r", RepositoryID: "r", CommitSHA: sha(1)}},
+		Checks: []activity.Check{{RepositoryID: "r", CommitSHA: sha(1), Name: "ci", ProviderRunID: "p1", Attempt: 1, Status: activity.CheckFailed,
+			Provenance: activity.ProviderVerified, StartedAt: time.Date(2026, 11, 18, 10, 0, 0, 0, time.UTC),
+			DetailsURL: "https://ci.example.com/p/1", Summary: "2 jobs failed", FailedJobs: []string{"lint", "unit"}}}}
+	round2, ok := checked.RefVia("v1", "build", &red, activity.Next)
+	require.True(t, ok)
+	golden(t, "loop_ledger", map[string]any{
+		"old_build":         oldBuild,
+		"checked_build":     build,
+		"red_check_run":     red,
+		"evidence_digest":   red.EvidenceDigest(),
+		"check_fingerprint": activity.CheckFingerprint(red.FailedChecks()),
+		"round_2":           round2,
+		"location_fingerprint": activity.FingerprintBy([]activity.Finding{{ID: "f", Severity: activity.High, Location: "a.go:12", Description: "x"}},
+			activity.StallLocation),
+	})
 }

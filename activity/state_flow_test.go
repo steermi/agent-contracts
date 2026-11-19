@@ -72,7 +72,7 @@ func TestOutcomeUsesLoopThreshold(t *testing.T) {
 	r.Findings = append(r.Findings, Finding{ID: "2", Severity: High, Description: "bug"})
 	assert.Equal(t, OutcomeChangesRequested, r.Outcome())
 	r.Findings[1].DismissalReason = "accepted risk"
-	assert.Equal(t, OutcomeApproved, r.Outcome(), "dismissed findings do not count")
+	assert.Equal(t, OutcomeChangesRequested, r.Outcome(), "a dismissal never changes the outcome")
 	r.Flow = nil
 	assert.Equal(t, OutcomeChangesRequested, r.Outcome(), "without a loop the recommendation decides")
 	r.State = Failed

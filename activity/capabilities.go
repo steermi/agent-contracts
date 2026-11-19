@@ -53,6 +53,28 @@ func CapabilitiesFor(runner Runner, scope string) CapabilitySet {
 	return s
 }
 
+// CapabilitiesForDocPage is the allowlist of a docs page run: read the page
+// and its area, research, and hand back. Answer may write a new version of
+// the page (the host only admits the subject page); findings only submit
+// findings. No work item, sprint, cycle or comment tools. Unknown runners get
+// none.
+func CapabilitiesForDocPage(runner Runner) CapabilitySet {
+	s := CapabilitySet{}
+	if runner != Answer && runner != Findings {
+		return s
+	}
+	for _, name := range []string{"get_doc_page", "get_doc_area", "web_search", "web_fetch", "ask_questions", "manage_todo_list", "read_skill_file", "report_instruction_conflict"} {
+		s[name] = true
+	}
+	if runner == Answer {
+		s["update_doc_page"] = true
+		s["submit_activity_outputs"] = true
+	} else {
+		s["submit_review_findings"] = true
+	}
+	return s
+}
+
 // CapabilitiesForMeeting restricts answer to read tools and typed proposals.
 // Domain mutations are possible only via immutable reviewed approval actions.
 func CapabilitiesForMeeting() CapabilitySet {

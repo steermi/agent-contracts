@@ -261,3 +261,13 @@ func TestSkillEffort(t *testing.T) {
 	bad := skill.Skill{Files: []skill.File{{Path: "SKILL.md", Content: strings.Replace(doc, "low", "max", 1)}}}
 	require.Error(t, bad.Validate())
 }
+
+func TestSkillSources(t *testing.T) {
+	doc := "---\nname: check\ndescription: Check docs\nmetadata:\n  steermi-result: findings\n  steermi-sources: related-docs, mystery\n---\n# Check\nDo it.\n"
+	s := skill.Skill{Files: []skill.File{{Path: "SKILL.md", Content: doc}}}
+	require.NoError(t, s.Validate(), "unknown sources are ignored, never refused")
+	assert.Equal(t, []string{skill.SourceRelatedDocs}, s.Sources())
+	assert.True(t, s.WantsSource(skill.SourceRelatedDocs))
+	assert.Empty(t, valid().Sources(), "the key is optional")
+	assert.False(t, valid().WantsSource(skill.SourceRelatedDocs))
+}

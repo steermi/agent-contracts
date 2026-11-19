@@ -158,6 +158,12 @@ const (
 	MaxAssumptionRunes             = 300
 	Next               CommandType = "next"
 	ApplyFixes         CommandType = "apply_fixes"
+	// DismissFinding records why a person set one finding of a submitted
+	// findings run aside (Finding.DismissalReason): applied by hand, or not
+	// worth acting on. It never changes the evidence digest.
+	DismissFinding CommandType = "dismiss_finding"
+	// MaxDismissalReasonRunes bounds a DismissFinding reason.
+	MaxDismissalReasonRunes = 600
 	// Internal commands; never accepted from an API caller.
 	CloseMeeting       CommandType = "close_meeting"
 	RecordMeetingRecap CommandType = "meeting_recap"
@@ -171,7 +177,7 @@ const (
 // Public reports whether API callers may send the command.
 func (t CommandType) Public() bool {
 	switch t {
-	case CloseMeeting, StopMeetingTurn, Continue, Confirm, Retry, Clarify, TakeLocal, ResumeCloud, Cancel, Submit, SubmitFindings, Decide, Revise, Next, ApplyFixes, Refine:
+	case CloseMeeting, StopMeetingTurn, Continue, Confirm, Retry, Clarify, TakeLocal, ResumeCloud, Cancel, Submit, SubmitFindings, Decide, Revise, Next, ApplyFixes, Refine, DismissFinding:
 		return true
 	}
 	return false
@@ -288,6 +294,18 @@ type Finding struct {
 	Location        string   `json:"location,omitempty"`
 	Description     string   `json:"description"`
 	DismissalReason string   `json:"dismissal_reason,omitempty"`
+	// Target names what the finding compares the subject against (another
+	// page, an AI rule, the project brief); the quotes cite both sides and
+	// Suggestion proposes what a person may do about it (finding.go).
+	Target       *FindingTarget     `json:"target,omitempty"`
+	SubjectQuote string             `json:"subject_quote,omitempty"`
+	TargetQuote  string             `json:"target_quote,omitempty"`
+	Suggestion   *FindingSuggestion `json:"suggestion,omitempty"`
+	// Expected and Observed state what should happen and what the reviewer
+	// saw instead (≤ MaxLoopTextRunes each); later loop rounds read them
+	// from the loop ledger.
+	Expected string `json:"expected,omitempty"`
+	Observed string `json:"observed,omitempty"`
 }
 type Check struct {
 	RepositoryID  string      `json:"repository_id"`
@@ -298,6 +316,14 @@ type Check struct {
 	Status        CheckStatus `json:"status"`
 	Provenance    string      `json:"provenance"`
 	StartedAt     time.Time   `json:"started_at"`
+	// DetailsURL links the provider's page of the check (absolute https,
+	// no userinfo); Summary (≤ MaxCheckSummaryBytes) and FailedJobs (≤
+	// MaxFailedJobs names, sorted) describe a result. They are third-party
+	// text: recordCheck redacts, strips markdown links and images and
+	// truncates them (CleanCheckDetails). Checks without them stay valid.
+	DetailsURL string   `json:"details_url,omitempty"`
+	Summary    string   `json:"summary,omitempty"`
+	FailedJobs []string `json:"failed_jobs,omitempty"`
 }
 type Decision struct {
 	UserID         string       `json:"user_id"`
@@ -359,8 +385,16 @@ type Run struct {
 	Findings                []Finding      `json:"findings,omitempty"`
 	Recommendation          Recommendation `json:"recommendation,omitempty"`
 	Summary                 string         `json:"summary,omitempty"`
+	// DroppedFindings counts the submitted findings the host refused to keep
+	// (SubmitFindings): a docs page run's findings whose quotes do not occur
+	// in the pinned texts. Omitted when zero.
+	DroppedFindings int `json:"dropped_findings,omitempty"`
 	// Assumptions the run made where its sources were silent (Submit).
 	Assumptions []string `json:"assumptions,omitempty"`
+	// Tried is the run's own one-line account of its approach (Submit,
+	// SubmitFindings; ≤ MaxLoopTextRunes). A label for people and later loop
+	// rounds, never an input to a stop.
+	Tried string `json:"tried,omitempty"`
 	// Feedback is the person's change request a Refine successor works from.
 	Feedback string `json:"feedback,omitempty"`
 	// SkillInputs is the validated start-form value of the run's skill
@@ -412,13 +446,19 @@ type Command struct {
 	Recommendation    Recommendation `json:"recommendation,omitempty"`
 	Summary           string         `json:"summary,omitempty"`
 	Assumptions       []string       `json:"assumptions,omitempty"`
+	Tried             string         `json:"tried,omitempty"`
 	Decision          DecisionKind   `json:"decision,omitempty"`
 	EvidenceDigest    string         `json:"evidence_digest,omitempty"`
 	Reason            string         `json:"reason,omitempty"`
-	Check             *Check         `json:"check,omitempty"`
+	// FindingID names the finding a DismissFinding command sets aside.
+	FindingID string `json:"finding_id,omitempty"`
+	Check     *Check `json:"check,omitempty"`
 	// Internal payloads, never decoded from API bodies.
 	Blocker Blocker `json:"-"`
 	Cost    float64 `json:"-"`
+	// DroppedFindings is set by the host on SubmitFindings: how many
+	// submitted findings it dropped before the command (Run.DroppedFindings).
+	DroppedFindings int `json:"-"`
 }
 
 func NewRun(id, org, project, item string, a Actor, q Request, parent *Run) (Run, error) {
@@ -437,6 +477,15 @@ func NewRun(id, org, project, item string, a Actor, q Request, parent *Run) (Run
 		return Run{}, ErrValidation
 	}
 	if subject.Kind == SubjectSession && (project != "" || item != "" || parent != nil) {
+		return Run{}, ErrValidation
+	}
+	// A docs page run has no project or work item; its scope is the page's area.
+	if subject.Kind == SubjectDocPage && (project != "" || item != "") {
+		return Run{}, ErrValidation
+	}
+	// A docs page chain stays on its page: successors never move to another
+	// page, and work item runs never spawn page runs (or the reverse).
+	if parent != nil && (subject.Kind == SubjectDocPage || parent.IsDocPage()) && parent.RunSubject() != subject {
 		return Run{}, ErrValidation
 	}
 	p := q.Policy.Normalized()
@@ -468,6 +517,9 @@ func NewRun(id, org, project, item string, a Actor, q Request, parent *Run) (Run
 		if r.IsMeeting() {
 			r.Capabilities = CapabilitiesForMeeting()
 		}
+	}
+	if subject.Kind == SubjectDocPage {
+		r.Capabilities = CapabilitiesForDocPage(q.Runner)
 	}
 	if q.Runner == Findings {
 		r.Outputs = Sources(q.Inputs)
@@ -539,7 +591,21 @@ func (r Run) EvidenceDigest() string {
 		Checks         []Check
 		Findings       []Finding
 		Recommendation Recommendation
-	}{r.InputDigest, r.Outputs, r.Checks, r.Findings, r.Recommendation})
+	}{r.InputDigest, r.Outputs, r.Checks, evidenceFindings(r.Findings), r.Recommendation})
+}
+
+// evidenceFindings is what the evidence digest covers: the findings as
+// submitted. A dismissal is a person's note on the evidence, not evidence, so
+// dismissing never invalidates decisions or re-keys a followed flow hop.
+func evidenceFindings(in []Finding) []Finding {
+	if !slices.ContainsFunc(in, func(f Finding) bool { return !f.open() }) {
+		return in
+	}
+	out := slices.Clone(in)
+	for i := range out {
+		out[i].DismissalReason = ""
+	}
+	return out
 }
 func Digest(v any) string {
 	b, _ := json.Marshal(v)
@@ -566,24 +632,6 @@ func (r Run) HumanAccepted() bool {
 	return accepted >= max(r.Policy.Quorum, 1)
 }
 
-// ChecksPassed requires every policy check to have succeeded, provider
-// verified, on every submitted repository revision.
-func (r Run) ChecksPassed() bool {
-	for _, o := range r.Outputs {
-		if o.Kind != RefRepository {
-			continue
-		}
-		for _, name := range r.Policy.RequiredChecks {
-			if !slices.ContainsFunc(r.Checks, func(c Check) bool {
-				return c.Name == name && c.RepositoryID == o.RepositoryID && c.CommitSHA == o.CommitSHA && c.Provenance == ProviderVerified && c.Status == CheckSuccess
-			}) {
-				return false
-			}
-		}
-	}
-	return true
-}
-
 // guard is the single eligibility rule: who may issue a command in which
 // state. Apply and Successor add payload validation; AllowedCommands lists
 // the commands whose guard passes.
@@ -593,6 +641,11 @@ func (r Run) guard(a Actor, t CommandType) error {
 		return r.sessionGuard(a, t, owner)
 	}
 	if r.IsSessionWorkflow() && !r.sessionAllows(t) {
+		return ErrForbidden
+	}
+	// Docs page runs are cloud only: nothing moves them to, or waits for, a
+	// local agent. ResumeCloud stays: it resumes a blocked run in the cloud.
+	if r.IsDocPage() && (t == TakeLocal || t == Handoff) {
 		return ErrForbidden
 	}
 	manager := owner || a.manager()
@@ -693,6 +746,17 @@ func (r Run) guard(a Actor, t CommandType) error {
 		if _, rework := r.reworkHop(); t == Next && r.NextRunner() == "" || t == ApplyFixes && (r.Runner != Findings || r.State != Submitted || !rework) {
 			return ErrConflict
 		}
+	case DismissFinding:
+		// The run's owner or a manager sets findings aside, as people.
+		if !manager || !a.human() {
+			return ErrForbidden
+		}
+		if r.Blocker != "" {
+			return ErrStale
+		}
+		if r.Runner != Findings || (r.State != Submitted && r.State != Completed) || !slices.ContainsFunc(r.Findings, Finding.open) {
+			return ErrConflict
+		}
 	case Interrupt:
 		if a.Purpose != PurposeCoordinator {
 			return ErrForbidden
@@ -715,7 +779,7 @@ func (r Run) guard(a Actor, t CommandType) error {
 }
 
 // userCommands are the commands a person can act on from the run's controls.
-var userCommands = []CommandType{CloseMeeting, StopMeetingTurn, Continue, Confirm, Retry, TakeLocal, ResumeCloud, Next, ApplyFixes, Refine, Submit, SubmitFindings, Decide, Cancel}
+var userCommands = []CommandType{CloseMeeting, StopMeetingTurn, Continue, Confirm, Retry, TakeLocal, ResumeCloud, Next, ApplyFixes, Refine, Submit, SubmitFindings, Decide, DismissFinding, Cancel}
 
 // AllowedCommands lists the controls this person may use now. Machine callers
 // act through their own protocols and get none.
@@ -843,15 +907,28 @@ func (r *Run) apply(a Actor, c Command) error {
 	case Submit:
 		return r.submit(c)
 	case SubmitFindings:
-		if c.Summary == "" || !slices.Contains([]Recommendation{Approve, ChangesRequested, Inconclusive}, c.Recommendation) {
+		if c.Summary == "" || c.DroppedFindings < 0 || !slices.Contains([]Recommendation{Approve, ChangesRequested, Inconclusive}, c.Recommendation) {
 			return ErrValidation
 		}
+		seen := make(map[string]bool, len(c.Findings))
 		for _, f := range c.Findings {
-			if f.ID == "" || f.Description == "" || !slices.Contains([]Severity{Critical, High, Medium, Low}, f.Severity) {
+			if f.ID == "" || seen[f.ID] || f.Description == "" || !slices.Contains([]Severity{Critical, High, Medium, Low}, f.Severity) || f.validateReference() != nil {
 				return ErrValidation
 			}
+			seen[f.ID] = true
 		}
+		// Only a person dismisses (DismissFinding): a submitted dismissal
+		// reason is cleared, not refused, so older runners keep working.
 		r.Findings = slices.Clone(c.Findings)
+		for i := range r.Findings {
+			r.Findings[i].DismissalReason = ""
+		}
+		tried, err := cleanTried(c.Tried)
+		if err != nil {
+			return err
+		}
+		r.Tried = tried
+		r.DroppedFindings = c.DroppedFindings
 		r.Summary = c.Summary
 		r.Recommendation = c.Recommendation
 		r.State = Submitted
@@ -876,6 +953,8 @@ func (r *Run) apply(a Actor, c Command) error {
 			return ErrValidation
 		}
 		r.Decisions = append(r.Decisions, Decision{a.UserID, c.Decision, c.Reason, c.EvidenceDigest, time.Now().UTC()})
+	case DismissFinding:
+		return r.dismissFinding(c)
 	case Revise:
 		if c.InputDigest == "" {
 			return ErrValidation
@@ -884,94 +963,5 @@ func (r *Run) apply(a Actor, c Command) error {
 			r.State, r.Blocker = Cancelled, BlockerInputsChanged
 		}
 	}
-	return nil
-}
-
-func (r *Run) submit(c Command) error {
-	if len(c.Outputs) == 0 {
-		return ErrValidation
-	}
-	for _, o := range c.Outputs {
-		if err := o.Validate(); err != nil {
-			return err
-		}
-		if o.Kind == RefContext || r.Runner == Answer && o.Kind == RefRepository {
-			return ErrForbidden
-		}
-	}
-	if pinned := RepositoryIDs(r.Inputs); r.Runner == Code && len(pinned) > 0 {
-		submitted := RepositoryIDs(c.Outputs)
-		if len(submitted) == 0 {
-			return ErrValidation
-		}
-		for _, id := range submitted {
-			if !slices.Contains(pinned, id) {
-				return ErrForbidden
-			}
-		}
-	}
-	assumptions, err := cleanAssumptions(c.Assumptions)
-	if err != nil {
-		return err
-	}
-	r.Outputs = slices.Clone(c.Outputs)
-	r.Summary = strings.TrimSpace(c.Summary)
-	r.Assumptions = assumptions
-	r.State = Submitted
-	return nil
-}
-
-// cleanAssumptions trims a submission's assumptions and drops blanks; too
-// many or too long ones are invalid rather than silently cut.
-func cleanAssumptions(in []string) ([]string, error) {
-	out := make([]string, 0, len(in))
-	for _, s := range in {
-		s = strings.TrimSpace(s)
-		if s == "" {
-			continue
-		}
-		if !utf8.ValidString(s) || utf8.RuneCountInString(s) > MaxAssumptionRunes {
-			return nil, ErrValidation
-		}
-		out = append(out, s)
-	}
-	if len(out) > MaxAssumptions {
-		return nil, ErrValidation
-	}
-	if len(out) == 0 {
-		return nil, nil
-	}
-	return out, nil
-}
-
-// recordCheck keeps the newest provider attempt per repository revision and
-// check name; late or replayed deliveries never regress a settled result.
-func (r *Run) recordCheck(c *Check) error {
-	if c == nil {
-		return ErrValidation
-	}
-	check := *c
-	if check.RepositoryID == "" || !fullSHA.MatchString(check.CommitSHA) || check.Name == "" || check.ProviderRunID == "" || check.Attempt < 1 ||
-		!slices.Contains([]CheckStatus{CheckPending, CheckSuccess, CheckFailed, CheckCancelled, CheckUnknown}, check.Status) {
-		return ErrValidation
-	}
-	if !slices.ContainsFunc(r.Outputs, func(o OutputRef) bool {
-		return o.RepositoryID == check.RepositoryID && o.CommitSHA == check.CommitSHA
-	}) {
-		return ErrStale
-	}
-	check.Provenance = ProviderVerified
-	for i, old := range r.Checks {
-		if old.RepositoryID != check.RepositoryID || old.CommitSHA != check.CommitSHA || old.Name != check.Name {
-			continue
-		}
-		older := check.StartedAt.Before(old.StartedAt) || check.StartedAt.Equal(old.StartedAt) && check.Attempt < old.Attempt
-		regress := old.ProviderRunID == check.ProviderRunID && old.Attempt == check.Attempt && check.Status == CheckPending && old.Status != CheckPending && old.Status != CheckUnknown
-		if !older && !regress {
-			r.Checks[i] = check
-		}
-		return nil
-	}
-	r.Checks = append(r.Checks, check)
 	return nil
 }

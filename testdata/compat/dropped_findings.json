@@ -1,0 +1,55 @@
+{
+  "evidence_digest": "c0dfd395335e24c76f8085fced6f33f104c536a0acb442e3bdded8071bcf9a46",
+  "run": {
+    "subject": {
+      "kind": "doc_page",
+      "id": "page-1",
+      "scope_type": "organization",
+      "scope_id": "org-1"
+    },
+    "id": "run-1",
+    "project_id": "",
+    "work_item_id": "",
+    "runner": "findings",
+    "state": "submitted",
+    "version": 4,
+    "generation": 1,
+    "input_digest": "edda0a3dc3b113a58b1bca6a3149e596fc1ffadb12fa13fbd0070b153d32e5a6",
+    "inputs": [
+      {
+        "kind": "docs",
+        "resource_id": "page-1",
+        "area_id": "area-1",
+        "revision": "3",
+        "hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      }
+    ],
+    "owner_id": "dev-1",
+    "execution_location": "cloud",
+    "origin": "manual",
+    "root_id": "run-1",
+    "round": 0,
+    "cost": 0,
+    "output_contract": "findings/1",
+    "outputs": [
+      {
+        "kind": "docs",
+        "resource_id": "page-1",
+        "area_id": "area-1",
+        "revision": "3",
+        "hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      }
+    ],
+    "recommendation": "inconclusive",
+    "summary": "Quotes not found",
+    "dropped_findings": 2,
+    "policy": {
+      "require_acceptance": false,
+      "quorum": 0,
+      "max_repair_rounds": 6,
+      "max_cost": 20
+    },
+    "created_at": "2026-10-20T12:00:00Z",
+    "updated_at": "2026-10-20T12:00:00Z"
+  }
+}

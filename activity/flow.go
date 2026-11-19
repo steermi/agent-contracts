@@ -34,7 +34,9 @@ const (
 	// OutcomeExhausted: a quality loop stopped (iterations, budget, stall).
 	OutcomeExhausted Outcome = "exhausted"
 	// OutcomeRepeat: the step must run again (code checks not passed). It
-	// is not an edge.
+	// is not an edge. Inside a quality loop a code step with required checks
+	// pins its repeat hop (FlowRef.Hops[OutcomeRepeat], Back): a failed
+	// check sends the round back to the step and counts as a round.
 	OutcomeRepeat Outcome = "repeat"
 )
 
@@ -79,9 +81,33 @@ type LoopPolicy struct {
 	Budget float64 `json:"budget,omitempty"`
 	// StopBelow: findings below this severity do not start another round.
 	StopBelow Severity `json:"stop_below,omitempty"`
-	// StallRounds: stop when the same findings repeat this many times.
+	// StallRounds: stop when the same findings (or the same failed checks)
+	// repeat this many times.
 	StallRounds int `json:"stall_rounds,omitempty"`
+	// StallMatch decides when two rounds found "the same problem": exact
+	// (default when empty) compares severity, location and wording;
+	// location ignores wording (FingerprintBy).
+	StallMatch StallMatch `json:"stall_match,omitempty"`
+	// OnFailedCheck: what a failed required check of a code step inside the
+	// loop does (FailedCheckAsk when empty): the round goes back to that
+	// step, started by a person (ask) or by the flow (auto, under the
+	// host's auto-edge policy).
+	OnFailedCheck string `json:"on_failed_check,omitempty"`
 }
+
+// StallMatch is how a loop compares findings across rounds.
+type StallMatch string
+
+const (
+	StallExact    StallMatch = "exact"
+	StallLocation StallMatch = "location"
+)
+
+// Failed-check modes of a loop (LoopPolicy.OnFailedCheck).
+const (
+	FailedCheckAsk  = "ask"
+	FailedCheckAuto = "auto"
+)
 
 // LoopState is a run's place in a quality loop.
 type LoopState struct {
@@ -97,6 +123,9 @@ type LoopState struct {
 	Revision string `json:"revision,omitempty"`
 	// Exhausted is where the loop exits when it stops.
 	Exhausted FlowHop `json:"exhausted"`
+	// Ledger is what earlier rounds tried and saw (loop.go), carried to
+	// every successor in the loop.
+	Ledger []LoopRound `json:"ledger,omitempty"`
 }
 
 // FlowRef places a run on a node of a pinned delivery flow version, with the
@@ -107,6 +136,14 @@ type FlowRef struct {
 	Node      string              `json:"node"`
 	Hops      map[Outcome]FlowHop `json:"hops,omitempty"`
 	Loop      *LoopState          `json:"loop,omitempty"`
+	// Rule and Arm attribute the chain to the host's flow assignment rule
+	// that chose this flow when its first run was placed (Rule: the host's
+	// rule id; Arm: the chosen arm of a split rule, empty for other kinds
+	// of rule). Both are empty when no rule chose the flow. Reporting only:
+	// they never decide successors or authorization, and successors on the
+	// same version carry them (flow.Resolved.Ref).
+	Rule string `json:"rule,omitempty"`
+	Arm  string `json:"arm,omitempty"`
 }
 
 // Outcome classifies a submitted, completed or failed run; "" otherwise.
@@ -135,6 +172,9 @@ func (r Run) Outcome() Outcome {
 		if r.Recommendation != ChangesRequested {
 			return OutcomeApproved
 		}
+		// Dismissals never change the outcome (in any state): the hop is
+		// decided by the findings as submitted. Dismissals only shape what
+		// successors work from (kept findings) and what people see.
 		if r.Flow != nil && r.Flow.Loop != nil && r.Flow.Loop.StopBelow != "" && !AnyAtOrAbove(r.Findings, r.Flow.Loop.StopBelow) {
 			// Findings below the threshold stay on the run as follow-ups.
 			return OutcomeApproved
@@ -152,19 +192,17 @@ func ValidSeverity(s Severity) bool { return severityRank[s] > 0 }
 // AtOrAbove reports whether s is at least min.
 func (s Severity) AtOrAbove(min Severity) bool { return severityRank[s] >= severityRank[min] }
 
-// AnyAtOrAbove reports whether an open finding is at least min.
+// AnyAtOrAbove reports whether a finding is at least min. Dismissed findings
+// count: a dismissal never changes a run's outcome.
 func AnyAtOrAbove(findings []Finding, min Severity) bool {
-	return slices.ContainsFunc(findings, func(f Finding) bool { return f.DismissalReason == "" && f.Severity.AtOrAbove(min) })
+	return slices.ContainsFunc(findings, func(f Finding) bool { return f.Severity.AtOrAbove(min) })
 }
 
-// Fingerprint identifies a set of open findings independently of their
-// order and ids, so a loop can tell when a round changed nothing.
+// Fingerprint identifies a set of findings independently of their order,
+// ids and dismissals, so a loop can tell when a round changed nothing.
 func Fingerprint(findings []Finding) string {
 	keys := make([]string, 0, len(findings))
 	for _, f := range findings {
-		if f.DismissalReason != "" {
-			continue
-		}
 		keys = append(keys, string(f.Severity)+"|"+strings.ToLower(strings.TrimSpace(f.Location))+"|"+strings.ToLower(strings.Join(strings.Fields(f.Description), " ")))
 	}
 	slices.Sort(keys)
@@ -188,7 +226,8 @@ func RevisionDigest(outputs []OutputRef) string {
 
 // Stop reports why the loop may not follow hop from r ("" = it may). This is
 // the single stop table of quality loops: a hop back to the loop's first step
-// stops at the iteration limit, the budget or repeated findings; a code run that
+// (or a failed-check round, which is pinned as Back) stops at the iteration
+// limit, the budget or repeated findings or failed checks; a code run that
 // reproduced the previous round's revision changed nothing, so reviewing it
 // again cannot help.
 func (l LoopState) Stop(r Run, hop FlowHop) Blocker {
@@ -197,7 +236,9 @@ func (l LoopState) Stop(r Run, hop FlowHop) Blocker {
 		return BlockerRepairLimit
 	case hop.Back && l.Budget > 0 && r.Cost-l.StartCost >= l.Budget:
 		return BlockerBudget
-	case hop.Back && r.Runner == Findings && l.StallRounds > 1 && len(r.Findings) > 0 && countOf(l.Fingerprints, Fingerprint(r.Findings))+1 >= l.StallRounds:
+	case hop.Back && r.Runner == Findings && l.StallRounds > 1 && len(r.Findings) > 0 && countOf(l.Fingerprints, FingerprintBy(r.Findings, l.StallMatch))+1 >= l.StallRounds:
+		return BlockerLoopStalled
+	case hop.Back && r.Runner == Code && l.StallRounds > 1 && r.ChecksFailed() && countOf(l.Fingerprints, CheckFingerprint(r.FailedChecks()))+1 >= l.StallRounds:
 		return BlockerLoopStalled
 	case r.Runner == Code && hop.Runner == Findings && l.Iteration > 1 && l.Revision != "" && RevisionDigest(r.Outputs) == l.Revision:
 		return BlockerLoopStalled
@@ -227,7 +268,15 @@ func (r Run) FlowNext() (hop FlowHop, stop Blocker, ok bool) {
 	case "":
 		return FlowHop{}, "", false
 	case OutcomeRepeat:
-		return FlowHop{Node: r.Flow.Node, Name: r.SkillName(), Runner: r.Runner}, "", true
+		_, has := r.Flow.Hops[OutcomeRepeat]
+		if !has {
+			return FlowHop{Node: r.Flow.Node, Name: r.SkillName(), Runner: r.Runner}, "", true
+		}
+		// A failed-check round of a loop: only a failed check starts it;
+		// pending or missing checks wait and spend no round.
+		if !r.ChecksFailed() {
+			return FlowHop{}, "", false
+		}
 	}
 	hop, ok = r.Flow.Hops[o]
 	if !ok {
@@ -239,6 +288,16 @@ func (r Run) FlowNext() (hop FlowHop, stop Blocker, ok bool) {
 		}
 	}
 	return hop, "", true
+}
+
+// HasRepeatHop reports whether the run pins a failed-check round (a code
+// step with required checks inside a quality loop).
+func (f *FlowRef) HasRepeatHop() bool {
+	if f == nil {
+		return false
+	}
+	_, ok := f.Hops[OutcomeRepeat]
+	return ok
 }
 
 // reworkHop is the hop Apply fixes follows: the changes-requested edge. A

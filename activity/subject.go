@@ -1,13 +1,22 @@
 package activity
 
+import "slices"
+
 // Subject identifies the resource whose commands share a mutation lock.
 // Session subjects host cloud answer workflows; they never impersonate work items.
+// Docs page subjects carry cloud answer and findings runs on one page; they
+// are ordinary runs (not session workflows) without a project or work item.
 type SubjectKind string
 
 const (
 	SubjectWorkItem SubjectKind = "work_item"
 	SubjectSession  SubjectKind = "session"
+	SubjectDocPage  SubjectKind = "doc_page"
 )
+
+// docPageScopes are the scopes a docs area (and so a page) belongs to. An
+// organization area's ScopeID is the organization id.
+var docPageScopes = []string{"organization", "workspace", "team", "project"}
 
 type Subject struct {
 	Kind      SubjectKind `json:"kind"`
@@ -29,6 +38,10 @@ func (s Subject) Validate(runner Runner, location Location) error {
 		if (s.ScopeType != "team" && s.ScopeType != "project" && s.ScopeType != "organization") || runner != Answer || (location != Cloud && !(s.ScopeType == "project" && location == Local)) {
 			return ErrValidation
 		}
+	case SubjectDocPage:
+		if !slices.Contains(docPageScopes, s.ScopeType) || (runner != Answer && runner != Findings) || location != Cloud {
+			return ErrValidation
+		}
 	default:
 		return ErrValidation
 	}
@@ -45,3 +58,6 @@ func (r Run) RunSubject() Subject {
 }
 func (r Run) IsSessionWorkflow() bool { return r.RunSubject().Kind == SubjectSession }
 func (r Run) IsMeeting() bool         { return r.IsSessionWorkflow() && r.RunSubject().ScopeType == "team" }
+
+// IsDocPage reports whether the run works on a docs page.
+func (r Run) IsDocPage() bool { return r.RunSubject().Kind == SubjectDocPage }

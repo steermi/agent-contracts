@@ -1,0 +1,50 @@
+{
+  "placed": {
+    "version_id": "v1",
+    "node": "plan",
+    "hops": {
+      "done": {
+        "node": "build",
+        "name": "Build",
+        "runner": "code"
+      }
+    },
+    "rule": "rule-1",
+    "arm": "fast"
+  },
+  "successor": {
+    "version_id": "v1",
+    "node": "build",
+    "hops": {
+      "done": {
+        "node": "review",
+        "name": "Review",
+        "runner": "findings"
+      }
+    },
+    "loop": {
+      "key": "quality",
+      "max_iterations": 3,
+      "stop_below": "high",
+      "stall_rounds": 2,
+      "iteration": 1,
+      "exhausted": {
+        "stop": "owner",
+        "approval": true
+      }
+    },
+    "rule": "rule-1",
+    "arm": "fast"
+  },
+  "unattributed": {
+    "version_id": "v1",
+    "node": "plan",
+    "hops": {
+      "done": {
+        "node": "build",
+        "name": "Build",
+        "runner": "code"
+      }
+    }
+  }
+}

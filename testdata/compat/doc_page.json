@@ -1,0 +1,164 @@
+{
+  "capabilities": [
+    "ask_questions",
+    "get_doc_area",
+    "get_doc_page",
+    "manage_todo_list",
+    "read_skill_file",
+    "report_instruction_conflict",
+    "submit_review_findings",
+    "web_fetch",
+    "web_search"
+  ],
+  "default_flow": {
+    "subject": "doc_page",
+    "start": "plan",
+    "nodes": [
+      {
+        "key": "plan",
+        "type": "agent",
+        "name": "Plan",
+        "skill": "steermi:plan",
+        "requires": {}
+      },
+      {
+        "key": "end",
+        "type": "end",
+        "name": "End",
+        "requires": {}
+      }
+    ],
+    "edges": [
+      {
+        "from": "plan",
+        "to": "end",
+        "on": "done"
+      }
+    ]
+  },
+  "default_flow_digest": "28ea290995b3aa2560c9a48f05640a5c188e02af076e112df7b9586e063609ee",
+  "default_flow_version": "system:doc:1",
+  "evidence_digest": "37b372b74fedbeccfa9c47d832e0d30c231f95bf2f655e21d65e243d4a8d2a75",
+  "run": {
+    "subject": {
+      "kind": "doc_page",
+      "id": "page-1",
+      "scope_type": "organization",
+      "scope_id": "org-1"
+    },
+    "id": "run-1",
+    "project_id": "",
+    "work_item_id": "",
+    "runner": "findings",
+    "state": "submitted",
+    "version": 4,
+    "generation": 1,
+    "input_digest": "edda0a3dc3b113a58b1bca6a3149e596fc1ffadb12fa13fbd0070b153d32e5a6",
+    "inputs": [
+      {
+        "kind": "docs",
+        "resource_id": "page-1",
+        "area_id": "area-1",
+        "revision": "3",
+        "hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      }
+    ],
+    "owner_id": "dev-1",
+    "execution_location": "cloud",
+    "origin": "manual",
+    "root_id": "run-1",
+    "round": 0,
+    "cost": 0,
+    "output_contract": "findings/1",
+    "outputs": [
+      {
+        "kind": "docs",
+        "resource_id": "page-1",
+        "area_id": "area-1",
+        "revision": "3",
+        "hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      }
+    ],
+    "findings": [
+      {
+        "id": "f-1",
+        "severity": "high",
+        "location": "Deploys",
+        "description": "Contradicts the release runbook",
+        "target": {
+          "type": "doc_page",
+          "id": "page-2",
+          "version": "7"
+        },
+        "subject_quote": "Deploys run on Fridays",
+        "target_quote": "Never deploy on Fridays",
+        "suggestion": {
+          "action": "mark_superseded",
+          "rationale": "The runbook is newer"
+        }
+      }
+    ],
+    "recommendation": "changes_requested",
+    "summary": "One conflict",
+    "policy": {
+      "require_acceptance": false,
+      "quorum": 0,
+      "max_repair_rounds": 6,
+      "max_cost": 20
+    },
+    "created_at": "2026-10-20T12:00:00Z",
+    "updated_at": "2026-10-20T12:00:00Z"
+  },
+  "triggered_flow": {
+    "subject": "doc_page",
+    "start": "draft",
+    "nodes": [
+      {
+        "key": "draft",
+        "type": "agent",
+        "name": "Draft",
+        "skill": "steermi:plan",
+        "requires": {},
+        "page_triggers": [
+          {
+            "event": "updated",
+            "mode": "ask"
+          }
+        ]
+      },
+      {
+        "key": "check",
+        "type": "agent",
+        "name": "Check",
+        "skill": "steermi:review",
+        "requires": {},
+        "page_triggers": [
+          {
+            "event": "published",
+            "mode": "auto"
+          }
+        ]
+      },
+      {
+        "key": "end",
+        "type": "end",
+        "requires": {}
+      }
+    ],
+    "edges": [
+      {
+        "from": "draft",
+        "to": "check",
+        "on": "done",
+        "start": "ask"
+      },
+      {
+        "from": "check",
+        "to": "end",
+        "on": "approved"
+      }
+    ]
+  },
+  "triggered_flow_digest": "4e2656eb7562064922434ef04195f98ca80a7e378e2a8e317f35bb17a759dedc",
+  "work_item_default_digest": "995702d4f581e42eb3f23680b4b74a14b8b2578182763e952e17354e83aa9430"
+}

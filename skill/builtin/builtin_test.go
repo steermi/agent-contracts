@@ -2,12 +2,16 @@ package builtin_test
 
 import (
 	"encoding/json"
+	"slices"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/steermi/agent-contracts/activity"
+	"github.com/steermi/agent-contracts/hint"
+	"github.com/steermi/agent-contracts/skill"
 	"github.com/steermi/agent-contracts/skill/builtin"
 )
 
@@ -56,7 +60,7 @@ func TestDuplicateName(t *testing.T) {
 }
 
 func TestEveryBuiltinIsValid(t *testing.T) {
-	require.Len(t, builtin.IDs(), 11)
+	require.Len(t, builtin.IDs(), 13)
 	for _, id := range builtin.IDs() {
 		s, ok := builtin.Get(id)
 		require.True(t, ok, id)
@@ -69,7 +73,8 @@ func TestEveryBuiltinIsValid(t *testing.T) {
 		if s.Result().Workspace() {
 			assert.Equal(t, id, got, "one built-in per workspace")
 		}
-		assert.Equal(t, builtin.Required(id), !s.Result().Workspace(), "delivery built-ins are required")
+		delivery := slices.Contains([]string{"steermi:plan", "steermi:build", "steermi:review"}, id)
+		assert.Equal(t, delivery, builtin.Required(id), "only the runner built-ins are required")
 		assert.NotNil(t, builtin.RefOf(id))
 	}
 	assert.False(t, builtin.Known("steermi:deploy"))
@@ -98,4 +103,53 @@ func TestRefinementInputsSchema(t *testing.T) {
 
 	_, err = schema.Validate([]byte(`{"pool":"everything"}`))
 	assert.Error(t, err, "pool is a closed enum")
+}
+
+func TestRunnersListEachRunnerOnce(t *testing.T) {
+	assert.Equal(t, []activity.Runner{activity.Answer, activity.Code, activity.Findings}, builtin.Runners())
+	assert.Equal(t, "steermi:plan", builtin.ID(activity.Answer), "the delivery built-in stays first")
+	assert.Equal(t, "steermi:review", builtin.ID(activity.Findings))
+}
+
+func TestDocsSkills(t *testing.T) {
+	reconcile, ok := builtin.Get("steermi:docs-reconcile")
+	require.True(t, ok)
+	require.NoError(t, reconcile.Validate())
+	assert.Equal(t, activity.Findings, reconcile.Runner())
+	assert.Equal(t, []string{"doc_page"}, reconcile.StartsFrom())
+	assert.Equal(t, hint.Medium, reconcile.Effort())
+	assert.Equal(t, []string{skill.SourceRelatedDocs}, reconcile.Sources())
+	k, ok := builtin.RunnerOf("steermi:docs-reconcile")
+	require.True(t, ok, "docs skills run as flow steps")
+	assert.Equal(t, activity.Findings, k)
+	for _, word := range []string{"subject_quote", "target_quote", "suggestion.action", "verbatim", "submit_review_findings"} {
+		assert.Contains(t, reconcile.Prompt(), word)
+	}
+
+	fix, ok := builtin.Get("steermi:docs-fix")
+	require.True(t, ok)
+	require.NoError(t, fix.Validate())
+	assert.Equal(t, activity.Answer, fix.Runner())
+	assert.Equal(t, []string{"doc_page"}, fix.StartsFrom())
+	assert.Empty(t, fix.Sources())
+	for _, word := range []string{"get_doc_page", "update_doc_page", "submit_activity_outputs", "resource_id"} {
+		assert.Contains(t, fix.Prompt(), word)
+	}
+}
+
+// Findings and summaries are read by people: both docs skills require plain
+// language there and forbid naming actions, tools or fields.
+func TestDocsSkillsWritePlainLanguageForPeople(t *testing.T) {
+	for _, id := range []string{"steermi:docs-reconcile", "steermi:docs-fix"} {
+		s, ok := builtin.Get(id)
+		require.True(t, ok, id)
+		prompt := strings.Join(strings.Fields(s.Prompt()), " ")
+		assert.Contains(t, prompt, "Plain language for people", id)
+		assert.Contains(t, prompt, "Never name actions, tools, commands or field names", id)
+	}
+	reconcile, _ := builtin.Get("steermi:docs-reconcile")
+	prompt := strings.Join(strings.Fields(reconcile.Prompt()), " ")
+	for _, phrase := range []string{"`description`", "`suggestion.rationale`", "edit the other page", "mark one page as superseded"} {
+		assert.Contains(t, prompt, phrase)
+	}
 }

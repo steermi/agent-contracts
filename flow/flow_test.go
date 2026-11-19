@@ -319,3 +319,26 @@ func TestStoredGraphsCarryNoActivity(t *testing.T) {
 	var g flow.Graph
 	assert.Error(t, json.Unmarshal([]byte(`{"start":"a","nodes":[{"key":"a","type":"agent","activity":"plan","skill":"steermi:plan"}],"edges":[]}`), &g), "graph v2 is rejected")
 }
+
+func TestRefCarriesRuleAttribution(t *testing.T) {
+	g := flow.DefaultResolved()
+	plan, ok := g.Ref("v1", "plan", nil)
+	require.True(t, ok)
+	assert.Empty(t, plan.Rule, "a new chain has no attribution until the host sets it")
+	plan.Rule, plan.Arm = "rule-1", "fast"
+
+	build, ok := g.Ref("v1", "build", &activity.Run{Runner: activity.Answer, Flow: &plan})
+	require.True(t, ok)
+	assert.Equal(t, "rule-1", build.Rule)
+	assert.Equal(t, "fast", build.Arm)
+	review, _ := g.Ref("v1", "review", &activity.Run{Runner: activity.Code, Flow: &build})
+	assert.Equal(t, "rule-1", review.Rule, "the loop keeps it")
+
+	other, _ := g.Ref("v2", "build", &activity.Run{Runner: activity.Answer, Flow: &plan})
+	assert.Empty(t, other.Rule, "another version is another placement")
+	assert.Empty(t, other.Arm)
+
+	b, err := json.Marshal(activity.FlowRef{VersionID: "v1", Node: "plan"})
+	require.NoError(t, err)
+	assert.JSONEq(t, `{"version_id":"v1","node":"plan"}`, string(b), "unattributed refs keep their wire shape")
+}

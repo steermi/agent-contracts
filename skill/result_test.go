@@ -17,9 +17,9 @@ func TestResultDerivesTheRunner(t *testing.T) {
 		inFlows   bool
 		subjects  []string
 	}{
-		{skill.ResultAnswer, activity.Answer, false, true, []string{"organization", "workspace", "team", "project", "work_item"}},
+		{skill.ResultAnswer, activity.Answer, false, true, []string{"organization", "workspace", "team", "project", "work_item", "doc_page"}},
 		{skill.ResultCode, activity.Code, false, true, []string{"work_item"}},
-		{skill.ResultFindings, activity.Findings, false, true, []string{"work_item"}},
+		{skill.ResultFindings, activity.Findings, false, true, []string{"work_item", "doc_page"}},
 		{skill.ResultRefinement, activity.Answer, true, false, []string{"team"}},
 		{skill.ResultCyclePlanning, activity.Answer, true, false, []string{"team"}},
 		{skill.ResultBoard, activity.Answer, true, false, []string{"team"}},
@@ -51,4 +51,7 @@ func TestStartsFromNarrows(t *testing.T) {
 	m.Metadata[skill.ResultKey] = "code"
 	assert.Equal(t, []string{"work_item"}, m.StartsFrom())
 	assert.Equal(t, "solo", m.Audience())
+	m.Metadata[skill.ResultKey] = "findings"
+	m.Metadata[skill.StartsFromKey] = "doc_page"
+	assert.Equal(t, []string{skill.SubjectDocPage}, m.StartsFrom(), "a findings skill can be limited to docs pages")
 }

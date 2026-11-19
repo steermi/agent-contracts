@@ -6,7 +6,8 @@
 // exactly one prompt path (skill.Skill.Prompt). The
 // workspace skills (Refinement, Cycle planning, Retro, Org design, Project
 // discovery, Documentation, Research) are the instructions of Steermi's
-// typed workspaces.
+// typed workspaces. Docs reconcile and Docs fix are the steps of the
+// default docs page flow; they can be turned off like workspace skills.
 //
 // Built-ins are visible in every organization, read-only and never stored;
 // deploys update them. An organization that wants its own copy duplicates one
@@ -26,7 +27,7 @@ import (
 
 // Version identifies the built-in skill content. Bump it with every content
 // change and add a Changelog line.
-const Version = "0.9.0"
+const Version = "0.10.3"
 
 // Prefix marks built-in skill identities ("steermi:plan", the plugin:skill
 // form of Claude Code; URL-safe, so built-ins share the skill routes).
@@ -34,6 +35,10 @@ const Prefix = "steermi:"
 
 // Changelog lists what changed per version, newest first.
 var Changelog = []Change{
+	{Version: "0.10.3", Note: "Docs reconcile and Docs fix write what people read (finding descriptions, rationales, summaries) in plain language and never name actions, tools, commands or field names there."},
+	{Version: "0.10.2", Note: "Docs reconcile requires a subject_quote on every finding and a target_quote on a finding with a doc_page target (hosts drop findings without them)."},
+	{Version: "0.10.1", Note: "Docs reconcile states the direction of mark_superseded: the subject page replaces the target; a target that replaces the subject is marked with a rationale starting \"Reverse:\"."},
+	{Version: "0.10.0", Note: "Docs reconcile (findings: compare a Docs page with its related pages, verbatim quotes, suggested fixes; asks for related-docs sources) and Docs fix (applies the kept findings to the page as one new version) run on docs pages."},
 	{Version: "0.9.0", Note: "Org design, Initiative planning and Cycle planning declare medium effort (steermi-effort): Steermi raises a lighter default effort to medium for these runs."},
 	{Version: "0.8.0", Note: "Refinement takes a start form (focus, tickets, candidate pool, queue size) and queues only from the eligible pool Steermi computes; refined items are remembered."},
 	{Version: "0.7.0", Note: "Initiative planning: break an initiative into per-team epics with cross-team dependencies; in chats Zoe can read initiatives (get_initiative)."},
@@ -51,11 +56,11 @@ type Change struct {
 	Note    string `json:"note"`
 }
 
-//go:embed plan build review refinement sprint-planning retro org-design project-discovery project-documentation work-planning initiative-planning
+//go:embed plan build review refinement sprint-planning retro org-design project-discovery project-documentation work-planning initiative-planning docs-reconcile docs-fix
 var files embed.FS
 
 // slugs lists every built-in in display order; delivery skills first.
-var slugs = []string{"plan", "build", "review", "refinement", "sprint-planning", "retro", "org-design", "project-discovery", "project-documentation", "work-planning", "initiative-planning"}
+var slugs = []string{"plan", "build", "review", "refinement", "sprint-planning", "retro", "org-design", "project-discovery", "project-documentation", "work-planning", "initiative-planning", "docs-reconcile", "docs-fix"}
 
 // skills holds every built-in, loaded once from the embedded files.
 var skills = sync.OnceValue(func() map[string]skill.Skill {
@@ -93,8 +98,10 @@ func Get(id string) (skill.Skill, bool) {
 	return skill.Skill{Files: slices.Clone(s.Files)}, true
 }
 
-// ForResult returns the built-in that hands back r. Each result has exactly
-// one: the skills' own manifests are the only mapping.
+// ForResult returns the built-in that hands back r: the first in display
+// order, so a runner's delivery skill (Plan, Build, Review) wins over the
+// docs skills and each workspace has exactly one. The skills' own manifests
+// are the only mapping.
 func ForResult(r skill.Result) (string, bool) {
 	for _, slug := range slugs {
 		if skills()[slug].Result() == r {
@@ -111,7 +118,8 @@ func ID(r activity.Runner) string {
 	return id
 }
 
-// RunnerOf returns the runner of a built-in delivery skill identity.
+// RunnerOf returns the runner of a built-in skill that runs as a flow step
+// (Plan, Build, Review and the docs skills); workspace skills have none.
 func RunnerOf(id string) (activity.Runner, bool) {
 	s, ok := Get(id)
 	if !ok || !s.Result().InFlows() {
@@ -121,10 +129,10 @@ func RunnerOf(id string) (activity.Runner, bool) {
 }
 
 // Required reports whether a built-in can never be turned off: the delivery
-// skills every flow falls back to.
+// skill of each runner (Plan, Build, Review), which every flow falls back to.
 func Required(id string) bool {
-	_, ok := RunnerOf(id)
-	return ok
+	r, ok := RunnerOf(id)
+	return ok && ID(r) == id
 }
 
 // For returns the built-in delivery skill of a runner.
@@ -134,7 +142,8 @@ func For(r activity.Runner) (skill.Skill, bool) { return Get(ID(r)) }
 func Runners() []activity.Runner {
 	var out []activity.Runner
 	for _, id := range IDs() {
-		if r, ok := RunnerOf(id); ok {
+		if Required(id) {
+			r, _ := RunnerOf(id)
 			out = append(out, r)
 		}
 	}

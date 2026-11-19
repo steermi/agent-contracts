@@ -73,6 +73,14 @@ var (
 	nodeTypes  = []NodeType{NodeAgent, NodeLoop, NodeApproval, NodeStatus, NodeEnd}
 )
 
+// Subjects a flow runs on (Graph.Subject); the values are skill subjects.
+const (
+	SubjectWorkItem = skill.SubjectWorkItem
+	SubjectDocPage  = skill.SubjectDocPage
+)
+
+var pageEvents = []string{activity.PageEventPublished, activity.PageEventUpdated}
+
 // Trigger starts a step when a person moves a work item. ToStatusID narrows
 // the category to one team status and is allowed only in team and project
 // flows (statuses belong to teams).
@@ -102,6 +110,8 @@ type Node struct {
 	Skill    string       `json:"skill,omitempty"`
 	Requires Requirements `json:"requires,omitempty"`
 	Triggers []Trigger    `json:"triggers,omitempty"`
+	// PageTriggers start the step on docs page events (docs page flows only).
+	PageTriggers []activity.PageTrigger `json:"page_triggers,omitempty"`
 	// Loop: the body's node keys (first = entry) and its stop conditions.
 	Body []string             `json:"body,omitempty"`
 	Loop *activity.LoopPolicy `json:"loop,omitempty"`
@@ -125,10 +135,14 @@ func (e Edge) Auto() bool { return e.Start == ModeAuto }
 
 // Graph is a flow version as stored and edited: agent steps name only
 // their skill. Resolve it to place runs, validate or simulate.
+//
+// Subject is what the flow's runs work on: work_item (the default when
+// empty, so stored work item flows keep their digest) or doc_page.
 type Graph struct {
-	Start string `json:"start"`
-	Nodes []Node `json:"nodes"`
-	Edges []Edge `json:"edges"`
+	Subject string `json:"subject,omitempty"`
+	Start   string `json:"start"`
+	Nodes   []Node `json:"nodes"`
+	Edges   []Edge `json:"edges"`
 }
 
 // Resolved is a graph whose agent steps carry the runner derived from their
@@ -190,6 +204,98 @@ func (e Issues) Unwrap() error { return ErrInvalid }
 // DefaultVersion identifies the built-in default flow on runs that pin it.
 const DefaultVersion = "system:1"
 
+// DefaultDocVersion identifies the built-in default docs page flow
+// (defaultDocPageV2).
+const DefaultDocVersion = "system:doc:2"
+
+// DocVersionV1 identifies the first built-in docs page flow (one Plan step).
+// It is no longer a default but stays resolvable for runs that pin it.
+const DocVersionV1 = "system:doc:1"
+
+// BuiltinGraph returns the built-in flow a run pins by version: the work
+// item default and every docs page default, current and earlier. Built-in
+// graphs never change under a version id.
+func BuiltinGraph(version string) (Graph, bool) {
+	switch version {
+	case DefaultVersion:
+		return Default(), true
+	case DocVersionV1:
+		return defaultDocPage(), true
+	case DefaultDocVersion:
+		return defaultDocPageV2(), true
+	}
+	return Graph{}, false
+}
+
+// IsBuiltinVersion reports whether version names a built-in flow.
+func IsBuiltinVersion(version string) bool {
+	_, ok := BuiltinGraph(version)
+	return ok
+}
+
+// SubjectKind is the flow's subject, work_item when unset.
+func (g Graph) SubjectKind() string { return cmp.Or(g.Subject, SubjectWorkItem) }
+
+// DefaultFor is the built-in default flow of a subject ("" = work_item);
+// unknown subjects get an empty graph, which never validates.
+func DefaultFor(subject string) Graph {
+	switch subject {
+	case "", SubjectWorkItem:
+		return Default()
+	case SubjectDocPage:
+		return defaultDocPageV2()
+	}
+	return Graph{}
+}
+
+// DefaultVersionFor identifies DefaultFor(subject) on runs that pin it ("" for
+// unknown subjects).
+func DefaultVersionFor(subject string) string {
+	switch subject {
+	case "", SubjectWorkItem:
+		return DefaultVersion
+	case SubjectDocPage:
+		return DefaultDocVersion
+	}
+	return ""
+}
+
+// defaultDocPage (system:doc:1) is one Plan step on the page, then End: no
+// triggers, no status changes. Kept unchanged for runs that pin it.
+func defaultDocPage() Graph {
+	return Graph{
+		Subject: SubjectDocPage,
+		Start:   "plan",
+		Nodes: []Node{
+			{Key: "plan", Type: NodeAgent, Name: "Plan", Skill: builtin.ID(activity.Answer)},
+			{Key: "end", Type: NodeEnd, Name: "End"},
+		},
+		Edges: []Edge{{From: "plan", To: "end", On: activity.OutcomeDone}},
+	}
+}
+
+// defaultDocPageV2 (system:doc:2) reconciles the page with its related
+// pages and, when findings ask for changes, offers to apply them: Docs
+// reconcile (asked when the page is published) → changes requested (ask) →
+// Docs fix → End; no findings → End. No status changes.
+func defaultDocPageV2() Graph {
+	return Graph{
+		Subject: SubjectDocPage,
+		Start:   "reconcile",
+		Nodes: []Node{
+			{Key: "reconcile", Type: NodeAgent, Name: "Reconcile", Skill: builtin.IDOf("docs-reconcile"),
+				PageTriggers: []activity.PageTrigger{{Event: activity.PageEventPublished, Mode: ModeAsk}}},
+			{Key: "fix", Type: NodeAgent, Name: "Fix", Skill: builtin.IDOf("docs-fix")},
+			{Key: "end", Type: NodeEnd, Name: "End"},
+		},
+		Edges: []Edge{
+			{From: "reconcile", To: "fix", On: activity.OutcomeChangesRequested, Start: ModeAsk},
+			{From: "reconcile", To: "end", On: activity.OutcomeApproved},
+			{From: "fix", To: "end", On: activity.OutcomeDone},
+		},
+	}
+}
+
 // Default is the built-in flow every organization inherits until a scope
 // saves its own: Plan → [quality loop: Build ⇄ Review, max 3 rounds, stop
 // below high] → ⚑ In review → End, the loop handing to the owner when it
@@ -245,16 +351,6 @@ func (g Graph) Node(key string) (Node, bool) {
 	return g.Nodes[i], true
 }
 
-// LoopOf returns the loop whose body holds key.
-func (g Graph) LoopOf(key string) (Node, bool) {
-	for _, n := range g.Nodes {
-		if n.Type == NodeLoop && slices.Contains(n.Body, key) {
-			return n, true
-		}
-	}
-	return Node{}, false
-}
-
 // Next returns the edge an outcome of a node follows.
 func (g Graph) Next(from string, on activity.Outcome) (Edge, bool) {
 	i := slices.IndexFunc(g.Edges, func(e Edge) bool { return e.From == from && e.On == on })
@@ -302,6 +398,14 @@ func (g Resolved) Validate(opt Options) error {
 		add("", "nodes", "a flow has 1 to %d nodes", MaxNodes)
 		return out
 	}
+	doc := g.Subject == SubjectDocPage
+	switch {
+	case g.Subject == SubjectWorkItem:
+		// One encoding (and digest) per flow: work items are the empty subject.
+		add("", "subject", "leave the subject empty for work item flows")
+	case g.Subject != "" && !doc:
+		add("", "subject", "a flow runs on work items or docs pages")
+	}
 	keys := map[string]Node{}
 	for _, n := range g.Nodes {
 		if !keyRe.MatchString(n.Key) {
@@ -314,6 +418,7 @@ func (g Resolved) Validate(opt Options) error {
 	}
 	member := map[string]string{} // body node → loop key
 	triggers := map[string]string{}
+	pageTriggers := map[string]string{}
 	agents := 0
 	for _, n := range g.Nodes {
 		if utf8.RuneCountInString(n.Name) > maxNameLength {
@@ -323,7 +428,7 @@ func (g Resolved) Validate(opt Options) error {
 			add(n.Key, "type", "must be agent, loop, approval, status or end")
 			continue
 		}
-		if n.Type != NodeAgent && (n.Skill != "" || len(n.Triggers) > 0 || len(n.Requires.Checks) > 0 || n.Requires.Acceptance) {
+		if n.Type != NodeAgent && (n.Skill != "" || len(n.Triggers) > 0 || len(n.PageTriggers) > 0 || len(n.Requires.Checks) > 0 || n.Requires.Acceptance) {
 			add(n.Key, "type", "only agent steps have a skill, triggers or requirements")
 		}
 		if n.Type != NodeLoop && (len(n.Body) > 0 || n.Loop != nil) {
@@ -336,15 +441,27 @@ func (g Resolved) Validate(opt Options) error {
 		case NodeAgent:
 			agents++
 			validateAgent(n, g.Runner(n.Key), add)
+			if doc && g.Runner(n.Key) == activity.Code {
+				add(n.Key, "skill", "code skills cannot run on a docs page")
+			}
 		case NodeLoop:
 			validateLoop(n, keys, member, add)
 		case NodeStatus:
+			if doc {
+				add(n.Key, "type", "docs page flows have no status changes")
+			}
 			switch {
 			case n.Status == nil || !slices.Contains(Categories, n.Status.Category):
 				add(n.Key, "status", "choose one of the status categories")
 			case n.Status.StatusID != "" && !opt.AllowStatusIDs:
 				add(n.Key, "status", "team statuses can only be used in team or project flows")
 			}
+		}
+		if n.Type == NodeAgent {
+			g.validatePageTriggers(n, doc, pageTriggers, add)
+		}
+		if doc && len(n.Triggers) > 0 {
+			add(n.Key, "triggers", "docs page flows start from page events, not status changes")
 		}
 		if len(n.Triggers) > MaxTriggersPerNode {
 			add(n.Key, "triggers", "at most %d triggers", MaxTriggersPerNode)
@@ -383,6 +500,9 @@ func (g Resolved) Validate(opt Options) error {
 		g.validateReach(keys, member, add)
 	}
 	if opt.Parent != nil {
+		if opt.Parent.SubjectKind() != g.SubjectKind() {
+			add("", "subject", "the inherited flow runs on %s", opt.Parent.SubjectKind())
+		}
 		for _, p := range opt.Parent.Nodes {
 			if !p.Required {
 				continue
@@ -404,6 +524,31 @@ func (g Resolved) Validate(opt Options) error {
 	return nil
 }
 
+func (g Resolved) validatePageTriggers(n Node, doc bool, seen map[string]string, add adder) {
+	if len(n.PageTriggers) == 0 {
+		return
+	}
+	if !doc {
+		add(n.Key, "page_triggers", "only docs page flows start from page events")
+		return
+	}
+	if len(n.PageTriggers) > MaxTriggersPerNode {
+		add(n.Key, "page_triggers", "at most %d triggers", MaxTriggersPerNode)
+	}
+	for _, t := range n.PageTriggers {
+		switch {
+		case !slices.Contains(pageEvents, t.Event):
+			add(n.Key, "page_triggers", "unknown page event %q", t.Event)
+		case !slices.Contains(modes, t.Mode):
+			add(n.Key, "page_triggers", "mode must be off, ask or auto")
+		}
+		if other, dup := seen[t.Event]; dup {
+			add(n.Key, "page_triggers", "the same page event already starts %q", other)
+		}
+		seen[t.Event] = n.Key
+	}
+}
+
 func validateAgent(n Node, runner activity.Runner, add adder) {
 	if n.Skill == "" {
 		add(n.Key, "skill", "an agent step runs a skill")
@@ -423,41 +568,6 @@ func validateAgent(n Node, runner activity.Runner, add adder) {
 	}
 	if runner != activity.Code && len(n.Requires.Checks) > 0 {
 		add(n.Key, "requires", "only build steps produce checked revisions")
-	}
-}
-
-func validateLoop(n Node, keys map[string]Node, member map[string]string, add adder) {
-	if len(n.Body) == 0 || len(n.Body) > MaxLoopBody {
-		add(n.Key, "body", "a loop holds 1 to %d steps", MaxLoopBody)
-	}
-	for _, b := range n.Body {
-		m, ok := keys[b]
-		switch {
-		case !ok:
-			add(n.Key, "body", "unknown step %q", b)
-		case m.Type != NodeAgent:
-			add(n.Key, "body", "only agent steps go inside a loop")
-		case member[b] != "":
-			add(n.Key, "body", "%q is already inside loop %q", b, member[b])
-		}
-		member[b] = n.Key
-	}
-	p := n.Loop
-	if p == nil {
-		add(n.Key, "loop", "a loop needs its stop conditions")
-		return
-	}
-	if p.MaxIterations < 1 || p.MaxIterations > MaxLoopIterations {
-		add(n.Key, "loop", "max iterations is 1 to %d", MaxLoopIterations)
-	}
-	if p.Budget < 0 {
-		add(n.Key, "loop", "the budget cannot be negative")
-	}
-	if p.StopBelow != "" && !activity.ValidSeverity(p.StopBelow) {
-		add(n.Key, "loop", "stop below must be low, medium, high or critical")
-	}
-	if p.StallRounds < 0 || p.StallRounds > MaxLoopIterations {
-		add(n.Key, "loop", "stall rounds is 0 to %d", MaxLoopIterations)
 	}
 }
 
@@ -548,8 +658,6 @@ func (g Resolved) validateEdges(keys map[string]Node, member map[string]string, 
 	}
 }
 
-func isEntry(loop Node, key string) bool { return len(loop.Body) > 0 && loop.Body[0] == key }
-
 func (g Resolved) nodeLabel(n Node) string {
 	if n.Type == NodeAgent {
 		return string(g.Runner(n.Key)) + " step " + n.Key
@@ -582,7 +690,7 @@ func (g Graph) validateReach(keys map[string]Node, member map[string]string, add
 	}
 	walk(g.Start)
 	for _, n := range g.Nodes {
-		if len(n.Triggers) > 0 {
+		if len(n.Triggers) > 0 || len(n.PageTriggers) > 0 {
 			walk(n.Key)
 		}
 	}
@@ -637,56 +745,6 @@ func (g Resolved) Hop(e Edge) activity.FlowHop {
 	return hop
 }
 
-// Ref places a run on an agent node of the version and pins its hops and
-// loop state. from is the run the new one follows (nil for a new chain):
-// inside the same loop its state carries over, a back edge starts the next
-// iteration and records the round's findings.
-func (g Resolved) Ref(versionID, key string, from *activity.Run) (activity.FlowRef, bool) {
-	n, ok := g.Node(key)
-	if !ok || n.Type != NodeAgent {
-		return activity.FlowRef{}, false
-	}
-	ref := activity.FlowRef{VersionID: versionID, Node: key, Hops: map[activity.Outcome]activity.FlowHop{}}
-	for _, o := range g.Outcomes(n) {
-		if e, ok := g.Next(key, o); ok {
-			ref.Hops[o] = g.Hop(e)
-		}
-	}
-	loop, inLoop := g.LoopOf(key)
-	if !inLoop {
-		return ref, true
-	}
-	if from != nil && from.Flow != nil && from.Flow.Loop != nil && from.Flow.Loop.Key == loop.Key && from.Flow.VersionID == versionID {
-		state := *from.Flow.Loop
-		state.Fingerprints = slices.Clone(state.Fingerprints)
-		if isEntry(loop, key) && from.Flow.Node != key {
-			state.Iteration++
-			if from.Runner == activity.Findings {
-				state.Fingerprints = append(state.Fingerprints, activity.Fingerprint(from.Findings))
-			}
-		}
-		if from.Runner == activity.Code {
-			if rev := activity.RevisionDigest(from.Outputs); rev != "" {
-				state.Revision = rev
-			}
-		}
-		ref.Loop = &state
-		return ref, true
-	}
-	// A valid graph gives every loop its policy and an exhausted exit; a run
-	// is never placed on a loop without them.
-	exit, ok := g.Next(loop.Key, activity.OutcomeExhausted)
-	if loop.Loop == nil || !ok {
-		return activity.FlowRef{}, false
-	}
-	state := activity.LoopState{Key: loop.Key, LoopPolicy: *loop.Loop, Iteration: 1, Exhausted: g.Hop(exit)}
-	if from != nil {
-		state.StartCost = from.Cost
-	}
-	ref.Loop = &state
-	return ref, true
-}
-
 // StepRule is a board rule compiled from a step trigger.
 type StepRule struct {
 	Node string
@@ -697,12 +755,40 @@ type StepRule struct {
 // node order. There is no other source of board automation.
 func (g Resolved) Rules() []StepRule {
 	var out []StepRule
+	if g.SubjectKind() != SubjectWorkItem {
+		return out
+	}
 	for _, n := range g.Nodes {
 		if n.Type != NodeAgent {
 			continue
 		}
 		for _, t := range n.Triggers {
 			out = append(out, StepRule{n.Key, activity.Rule{FromStatus: t.FromStatus, ToStatus: t.ToStatus, ToStatusID: t.ToStatusID, ItemType: t.ItemType, Runner: g.Runner(n.Key), Mode: t.Mode}})
+		}
+	}
+	return out
+}
+
+// PageStepRule is a docs page trigger of a step, with the step's runner, for
+// activity.EvaluatePageTrigger.
+type PageStepRule struct {
+	Node    string
+	Runner  activity.Runner
+	Trigger activity.PageTrigger
+}
+
+// PageRules lists every page trigger of a docs page flow, in node order.
+func (g Resolved) PageRules() []PageStepRule {
+	var out []PageStepRule
+	if g.Subject != SubjectDocPage {
+		return out
+	}
+	for _, n := range g.Nodes {
+		if n.Type != NodeAgent {
+			continue
+		}
+		for _, t := range n.PageTriggers {
+			out = append(out, PageStepRule{n.Key, g.Runner(n.Key), t})
 		}
 	}
 	return out
@@ -727,7 +813,8 @@ type ResultOf func(skillID string) (skill.Result, bool)
 
 // Resolve derives every agent step's runner from its skill's result
 // (built-ins resolve here; stored skills through results). Steps whose
-// skill is unknown, unusable or a workspace skill are reported and left
+// skill is unknown, unusable, a workspace skill or (in docs page flows) a
+// code skill are reported and left
 // without a runner, so Validate rejects them too. g is not modified.
 func (g Graph) Resolve(results ResultOf) (Resolved, Issues) {
 	out := Resolved{Graph: g, runners: map[string]activity.Runner{}}
@@ -752,6 +839,8 @@ func (g Graph) Resolve(results ResultOf) (Resolved, Issues) {
 			issues = append(issues, Issue{n.Key, "skill", "the skill is not published or not available here"})
 		case !r.InFlows():
 			issues = append(issues, Issue{n.Key, "skill", "workspace skills run as sessions and cannot be flow steps yet"})
+		case g.Subject == SubjectDocPage && r.Runner() == activity.Code:
+			issues = append(issues, Issue{n.Key, "skill", "code skills cannot run on a docs page"})
 		default:
 			out.runners[n.Key] = r.Runner()
 		}
@@ -774,15 +863,11 @@ func (g Graph) SkillIDs() []string {
 	return out
 }
 
-// HasAuto reports whether any edge starts its step automatically.
-func (g Graph) HasAuto() bool { return slices.ContainsFunc(g.Edges, Edge.Auto) }
-
-// WorstCaseCost is the most a loop can spend: its budget, or max iterations
-// times the per-run budget.
-func WorstCaseCost(l activity.LoopPolicy, perRun float64) float64 {
-	worst := float64(max(l.MaxIterations, 1)) * perRun
-	if l.Budget > 0 && l.Budget < worst {
-		return l.Budget
-	}
-	return worst
+// HasAuto reports whether any edge starts its step automatically, or a loop
+// fixes failed checks on its own (LoopPolicy.OnFailedCheck auto): both need
+// the host's auto-edge policy.
+func (g Graph) HasAuto() bool {
+	return slices.ContainsFunc(g.Edges, Edge.Auto) || slices.ContainsFunc(g.Nodes, func(n Node) bool {
+		return n.Type == NodeLoop && n.Loop != nil && n.Loop.OnFailedCheck == activity.FailedCheckAuto
+	})
 }

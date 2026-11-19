@@ -1,0 +1,113 @@
+{
+  "default_flow": {
+    "subject": "doc_page",
+    "start": "reconcile",
+    "nodes": [
+      {
+        "key": "reconcile",
+        "type": "agent",
+        "name": "Reconcile",
+        "skill": "steermi:docs-reconcile",
+        "requires": {},
+        "page_triggers": [
+          {
+            "event": "published",
+            "mode": "ask"
+          }
+        ]
+      },
+      {
+        "key": "fix",
+        "type": "agent",
+        "name": "Fix",
+        "skill": "steermi:docs-fix",
+        "requires": {}
+      },
+      {
+        "key": "end",
+        "type": "end",
+        "name": "End",
+        "requires": {}
+      }
+    ],
+    "edges": [
+      {
+        "from": "reconcile",
+        "to": "fix",
+        "on": "changes_requested",
+        "start": "ask"
+      },
+      {
+        "from": "reconcile",
+        "to": "end",
+        "on": "approved"
+      },
+      {
+        "from": "fix",
+        "to": "end",
+        "on": "done"
+      }
+    ]
+  },
+  "default_flow_digest": "5c89f8ef5d47599a41781f22726ea08737d513b371f186ef267c558075064a90",
+  "default_flow_version": "system:doc:2",
+  "fix_ref": {
+    "version_id": "system:doc:2",
+    "node": "fix",
+    "hops": {
+      "done": {
+        "stop": "end"
+      }
+    }
+  },
+  "page_rules": [
+    {
+      "Node": "reconcile",
+      "Runner": "findings",
+      "Trigger": {
+        "event": "published",
+        "mode": "ask"
+      }
+    }
+  ],
+  "reconcile_ref": {
+    "version_id": "system:doc:2",
+    "node": "reconcile",
+    "hops": {
+      "approved": {
+        "stop": "end"
+      },
+      "changes_requested": {
+        "node": "fix",
+        "name": "Fix",
+        "runner": "answer"
+      }
+    }
+  },
+  "skills": {
+    "steermi:docs-fix": {
+      "digest": "f1632a2a2e08b264294b2c3306845564875cf369b21ba475f0226117b4a7d250",
+      "effort": "",
+      "required": false,
+      "result": "answer",
+      "runner": "answer",
+      "sources": null,
+      "starts_from": [
+        "doc_page"
+      ]
+    },
+    "steermi:docs-reconcile": {
+      "digest": "7a972c3968b0f34b1383b9ee4ae23bbaf45cc69fe4ea469b99c1b0d492f3a427",
+      "effort": "medium",
+      "required": false,
+      "result": "findings",
+      "runner": "findings",
+      "sources": [
+        "related-docs"
+      ],
+      "starts_from": [
+        "doc_page"
+      ]
+    }
+  }
+}
