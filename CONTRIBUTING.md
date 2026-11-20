@@ -6,7 +6,7 @@ This page covers the development loop.
 
 ## Setup
 
-Go 1.27.3 or newer and Python 3 (for the documentation check). No Steermi
+Go 1.27.4 or newer and Python 3 (for the documentation check). No Steermi
 account, service or credentials are needed.
 
 ```bash

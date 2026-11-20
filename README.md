@@ -19,7 +19,7 @@ cannot drift apart without a test failing.
 go get github.com/steermi/agent-contracts
 ```
 
-Needs Go 1.27.3 or newer. Runtime dependencies: `golang.org/x/text` and
+Needs Go 1.27.4 or newer. Runtime dependencies: `golang.org/x/text` and
 `gopkg.in/yaml.v3`.
 
 ## How it works
