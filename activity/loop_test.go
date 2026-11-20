@@ -110,7 +110,7 @@ func TestRecordCheckCleansDetails(t *testing.T) {
 }
 
 func TestLoopFieldsRoundTrip(t *testing.T) {
-	in := Run{ID: "r", Tried: "t", Flow: &FlowRef{Node: "build", Loop: &LoopState{Key: "q", LoopPolicy: LoopPolicy{MaxIterations: 3, StallMatch: StallLocation, OnFailedCheck: FailedCheckAuto},
+	in := Run{ID: "r", Tried: "t", Flow: &FlowRef{Node: "build", Loop: &LoopState{Key: "q", LoopPolicy: LoopPolicy{MaxIterations: 3, StallMatch: StallLocation, Advance: LoopAdvanceAuto},
 		Ledger: []LoopRound{{Iteration: 1, Steps: []LoopStep{{RunID: "a", Runner: Code, Passed: []string{"lint"}, Red: []Red{{Kind: RedCheck, Ref: "ci", URL: "https://x"}}}}}}}},
 		Checks: []Check{{Name: "ci", DetailsURL: "https://x", Summary: "s", FailedJobs: []string{"j"}}}}
 	b, err := json.Marshal(in)
@@ -125,6 +125,6 @@ func TestLoopFieldsRoundTrip(t *testing.T) {
 	b, _ = json.Marshal(old)
 	assert.NotContains(t, string(b), "ledger")
 	assert.NotContains(t, string(b), "stall_match")
-	assert.NotContains(t, string(b), "on_failed_check")
+	assert.NotContains(t, string(b), "advance")
 	assert.NotContains(t, string(b), "tried")
 }

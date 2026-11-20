@@ -7,14 +7,18 @@
       "done": {
         "node": "review",
         "name": "Review",
-        "runner": "findings"
+        "runner": "findings",
+        "auto": true,
+        "in_loop": true,
+        "location_rule": "cloud"
       },
       "repeat": {
         "node": "build",
         "name": "Build",
         "runner": "code",
         "auto": true,
-        "back": true
+        "back": true,
+        "in_loop": true
       }
     },
     "loop": {
@@ -23,7 +27,7 @@
       "stop_below": "high",
       "stall_rounds": 2,
       "stall_match": "location",
-      "on_failed_check": "auto",
+      "advance": "auto",
       "iteration": 1,
       "exhausted": {
         "stop": "owner",
@@ -40,7 +44,8 @@
       "done": {
         "node": "review",
         "name": "Review",
-        "runner": "findings"
+        "runner": "findings",
+        "in_loop": true
       }
     },
     "loop": {
@@ -63,14 +68,18 @@
         "done": {
           "node": "review",
           "name": "Review",
-          "runner": "findings"
+          "runner": "findings",
+          "auto": true,
+          "in_loop": true,
+          "location_rule": "cloud"
         },
         "repeat": {
           "node": "build",
           "name": "Build",
           "runner": "code",
           "auto": true,
-          "back": true
+          "back": true,
+          "in_loop": true
         }
       },
       "loop": {
@@ -79,7 +88,7 @@
         "stop_below": "high",
         "stall_rounds": 2,
         "stall_match": "location",
-        "on_failed_check": "auto",
+        "advance": "auto",
         "iteration": 1,
         "exhausted": {
           "stop": "owner",
@@ -154,14 +163,18 @@
       "done": {
         "node": "review",
         "name": "Review",
-        "runner": "findings"
+        "runner": "findings",
+        "auto": true,
+        "in_loop": true,
+        "location_rule": "cloud"
       },
       "repeat": {
         "node": "build",
         "name": "Build",
         "runner": "code",
         "auto": true,
-        "back": true
+        "back": true,
+        "in_loop": true
       }
     },
     "loop": {
@@ -170,7 +183,7 @@
       "stop_below": "high",
       "stall_rounds": 2,
       "stall_match": "location",
-      "on_failed_check": "auto",
+      "advance": "auto",
       "iteration": 2,
       "fingerprints": [
         "56606f684c030a0cfb39856d75e0bca749f54dc81dd8a6b04b1b110c892d1067"

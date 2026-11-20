@@ -19,7 +19,10 @@
       "done": {
         "node": "review",
         "name": "Review",
-        "runner": "findings"
+        "runner": "findings",
+        "auto": true,
+        "in_loop": true,
+        "location_rule": "cloud"
       }
     },
     "loop": {
@@ -27,6 +30,7 @@
       "max_iterations": 3,
       "stop_below": "high",
       "stall_rounds": 2,
+      "advance": "auto",
       "iteration": 1,
       "exhausted": {
         "stop": "owner",

@@ -13,10 +13,10 @@ import (
 )
 
 // checkedDefault is the default flow whose Build step requires the "ci" check.
-func checkedDefault(onFailed string) flow.Resolved {
+func checkedDefault(advance activity.LoopAdvance) flow.Resolved {
 	g := flow.Default()
 	node(&g, "build").Requires.Checks = []string{"ci"}
-	node(&g, "quality").Loop.OnFailedCheck = onFailed
+	node(&g, "quality").Loop.Advance = advance
 	return resolved(g)
 }
 
@@ -41,12 +41,12 @@ func TestRepeatHopPinnedOnlyForCheckedCodeStepsInLoops(t *testing.T) {
 
 	ask, _ := checkedDefault("").Ref("v", "build", nil)
 	require.True(t, ask.HasRepeatHop())
-	assert.Equal(t, activity.FlowHop{Node: "build", Name: "Build", Runner: activity.Code, Back: true}, ask.Hops[activity.OutcomeRepeat])
+	assert.Equal(t, activity.FlowHop{Node: "build", Name: "Build", Runner: activity.Code, Back: true, InLoop: true}, ask.Hops[activity.OutcomeRepeat])
 
-	explicitAsk, _ := checkedDefault(activity.FailedCheckAsk).Ref("v", "build", nil)
+	explicitAsk, _ := checkedDefault(activity.LoopAdvanceAsk).Ref("v", "build", nil)
 	assert.False(t, explicitAsk.Hops[activity.OutcomeRepeat].Auto)
 
-	auto, _ := checkedDefault(activity.FailedCheckAuto).Ref("v", "build", nil)
+	auto, _ := checkedDefault(activity.LoopAdvanceAuto).Ref("v", "build", nil)
 	assert.True(t, auto.Hops[activity.OutcomeRepeat].Auto)
 
 	g := flow.Default()
@@ -57,9 +57,12 @@ func TestRepeatHopPinnedOnlyForCheckedCodeStepsInLoops(t *testing.T) {
 }
 
 func TestFailedCheckRound(t *testing.T) {
-	g := checkedDefault(activity.FailedCheckAuto)
+	g := checkedDefault(activity.LoopAdvanceAuto)
 	owner := activity.Actor{UserID: "o", Role: "member"}
 	ref, _ := g.Ref("v", "build", nil)
+	repeat := ref.Hops[activity.OutcomeRepeat]
+	repeat.Location = activity.Cloud // the host pins each hop's location
+	ref.Hops[activity.OutcomeRepeat] = repeat
 
 	pending := codeRun("b1", &ref, 1, activity.CheckPending)
 	_, _, ok := pending.FlowNext()
@@ -80,7 +83,8 @@ func TestFailedCheckRound(t *testing.T) {
 	auto, ok := red.AutoHop()
 	assert.True(t, ok)
 	assert.Equal(t, "build", auto.Node)
-	kind, err := red.Successor(owner, activity.Command{Type: activity.Next, ExpectedVersion: 1})
+	spawn, err := red.Successor(owner, activity.Command{Type: activity.Next, ExpectedVersion: 1})
+	kind := spawn.Runner
 	require.NoError(t, err)
 	assert.Equal(t, activity.Code, kind)
 
@@ -234,9 +238,10 @@ func TestLoopSettingsValidation(t *testing.T) {
 		{"exact", func(p *activity.LoopPolicy) { p.StallMatch = activity.StallExact }, true},
 		{"location", func(p *activity.LoopPolicy) { p.StallMatch = activity.StallLocation }, true},
 		{"bad match", func(p *activity.LoopPolicy) { p.StallMatch = "fuzzy" }, false},
-		{"ask", func(p *activity.LoopPolicy) { p.OnFailedCheck = activity.FailedCheckAsk }, true},
-		{"auto", func(p *activity.LoopPolicy) { p.OnFailedCheck = activity.FailedCheckAuto }, true},
-		{"bad mode", func(p *activity.LoopPolicy) { p.OnFailedCheck = "always" }, false},
+		{"ask", func(p *activity.LoopPolicy) { p.Advance = activity.LoopAdvanceAsk }, true},
+		{"auto", func(p *activity.LoopPolicy) { p.Advance = activity.LoopAdvanceAuto }, true},
+		{"missing", func(p *activity.LoopPolicy) { p.Advance = "" }, true},
+		{"bad mode", func(p *activity.LoopPolicy) { p.Advance = "always" }, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			g := flow.Default()
@@ -250,12 +255,12 @@ func TestLoopSettingsValidation(t *testing.T) {
 		})
 	}
 	g := flow.Default()
-	node(&g, "quality").Loop.OnFailedCheck = activity.FailedCheckAuto
-	assert.True(t, g.HasAuto(), "fixing checks automatically needs the auto policy")
+	require.True(t, node(&g, "quality").Loop.AutoAdvance())
+	assert.False(t, g.HasAutoOutsideLoops(), "a loop advancing by itself needs no auto-edge policy")
 }
 
 func TestSimulateFailedCheckRounds(t *testing.T) {
-	sim := checkedDefault(activity.FailedCheckAuto).Simulate(flow.Script{"build": {flow.CheckFailed}}, "", 1)
+	sim := checkedDefault(activity.LoopAdvanceAuto).Simulate(flow.Script{"build": {flow.CheckFailed}}, "", 1)
 	require.GreaterOrEqual(t, len(sim.Steps), 3)
 	assert.Equal(t, activity.OutcomeRepeat, sim.Steps[1].Outcome)
 	assert.True(t, sim.Steps[1].Auto)

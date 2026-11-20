@@ -109,7 +109,12 @@ type Node struct {
 	// never stored (graph v3).
 	Skill    string       `json:"skill,omitempty"`
 	Requires Requirements `json:"requires,omitempty"`
-	Triggers []Trigger    `json:"triggers,omitempty"`
+	// Location (agent steps): where the step runs. inherit (default when
+	// empty) = where the chain last ran this step, else where its
+	// predecessor ran; cloud or local fix it. Hosts resolve it into
+	// activity.FlowHop.Location when they place a run.
+	Location activity.LocationRule `json:"location,omitempty"`
+	Triggers []Trigger             `json:"triggers,omitempty"`
 	// PageTriggers start the step on docs page events (docs page flows only).
 	PageTriggers []activity.PageTrigger `json:"page_triggers,omitempty"`
 	// Loop: the body's node keys (first = entry) and its stop conditions.
@@ -122,7 +127,9 @@ type Node struct {
 }
 
 // Edge follows an outcome of From. Start applies to edges into agent steps
-// and loops: ask (default) waits for a person, auto starts the step.
+// and loops: ask (default) waits for a person, auto starts the step. Edges
+// between two steps of the same loop have no start: the loop's
+// LoopPolicy.Advance decides them.
 type Edge struct {
 	From  string           `json:"from"`
 	To    string           `json:"to"`
@@ -173,8 +180,33 @@ func (g *Graph) UnmarshalJSON(data []byte) error {
 	if err := dec.Decode(&p); err != nil {
 		return err
 	}
-	*g = Graph(p)
+	*g = Graph(p).normalized()
 	return nil
+}
+
+// normalized is the one place a graph's defaults get one spelling: an
+// explicit inherit location or an explicit ask advance becomes empty. Every
+// graph passes it, decoded (UnmarshalJSON) or built in Go (Resolve,
+// Digest), so a flow written either way has one digest and its hops pin
+// one rule ("" = inherit, never "inherit").
+func (g Graph) normalized() Graph {
+	if !slices.ContainsFunc(g.Nodes, func(n Node) bool {
+		return n.Location == activity.RuleInherit || n.Loop != nil && n.Loop.Advance == activity.LoopAdvanceAsk
+	}) {
+		return g
+	}
+	g.Nodes = slices.Clone(g.Nodes)
+	for i, n := range g.Nodes {
+		if n.Location == activity.RuleInherit {
+			g.Nodes[i].Location = ""
+		}
+		if n.Loop != nil && n.Loop.Advance == activity.LoopAdvanceAsk {
+			p := *n.Loop
+			p.Advance = ""
+			g.Nodes[i].Loop = &p
+		}
+	}
+	return g
 }
 
 // Issue is a validation problem addressed to a node (empty for the graph).
@@ -201,8 +233,13 @@ func (e Issues) Error() string {
 
 func (e Issues) Unwrap() error { return ErrInvalid }
 
-// DefaultVersion identifies the built-in default flow on runs that pin it.
-const DefaultVersion = "system:1"
+// DefaultVersion identifies the built-in default flow (Default) on runs that
+// pin it.
+const DefaultVersion = "system:2"
+
+// VersionV1 identifies the first built-in work item flow (every edge asks).
+// It is no longer the default but stays resolvable for runs that pin it.
+const VersionV1 = "system:1"
 
 // DefaultDocVersion identifies the built-in default docs page flow
 // (defaultDocPageV2).
@@ -219,6 +256,8 @@ func BuiltinGraph(version string) (Graph, bool) {
 	switch version {
 	case DefaultVersion:
 		return Default(), true
+	case VersionV1:
+		return defaultV1(), true
 	case DocVersionV1:
 		return defaultDocPage(), true
 	case DefaultDocVersion:
@@ -296,11 +335,43 @@ func defaultDocPageV2() Graph {
 	}
 }
 
-// Default is the built-in flow every organization inherits until a scope
-// saves its own: Plan → [quality loop: Build ⇄ Review, max 3 rounds, stop
-// below high] → ⚑ In review → End, the loop handing to the owner when it
-// stops. Every edge asks; board triggers are the former default rules.
+// Default (system:2) is the built-in flow every organization inherits until
+// a scope saves its own: Plan → [quality loop: Build ⇄ Review, max 3
+// rounds, stop below high, advancing by itself] → ⚑ In review → End, the
+// loop handing to the owner when it stops. Plan → loop asks; Review always
+// runs in the cloud, Build where the chain runs it. Board triggers are the
+// former default rules.
 func Default() Graph {
+	return Graph{
+		Start: "plan",
+		Nodes: []Node{
+			{Key: "plan", Type: NodeAgent, Name: "Plan", Skill: builtin.ID(activity.Answer)},
+			{Key: "quality", Type: NodeLoop, Name: "Quality loop", Body: []string{"build", "review"},
+				Loop: &activity.LoopPolicy{MaxIterations: DefaultIterations, StopBelow: activity.High, StallRounds: DefaultStallRounds, Advance: activity.LoopAdvanceAuto}},
+			{Key: "build", Type: NodeAgent, Name: "Build", Skill: builtin.ID(activity.Code),
+				Triggers: []Trigger{{FromStatus: "todo", ToStatus: "in_progress", ItemType: "*", Mode: ModeAsk}}},
+			{Key: "review", Type: NodeAgent, Name: "Review", Skill: builtin.ID(activity.Findings), Location: activity.RuleCloud,
+				Triggers: []Trigger{{FromStatus: "in_progress", ToStatus: "in_review", ItemType: "*", Mode: ModeAsk}}},
+			{Key: "in_review", Type: NodeStatus, Name: "In review", Status: &activity.StatusTarget{Category: "in_review"}},
+			{Key: "owner", Type: NodeApproval, Name: "Owner decides"},
+			{Key: "end", Type: NodeEnd, Name: "End"},
+		},
+		Edges: []Edge{
+			{From: "plan", To: "quality", On: activity.OutcomeDone, Start: ModeAsk},
+			// Inside the loop: no start, the loop's advance decides.
+			{From: "build", To: "review", On: activity.OutcomeDone},
+			{From: "review", To: "build", On: activity.OutcomeChangesRequested},
+			{From: "review", To: "in_review", On: activity.OutcomeApproved},
+			{From: "quality", To: "owner", On: activity.OutcomeExhausted},
+			{From: "in_review", To: "end", On: activity.OutcomeDone},
+		},
+	}
+}
+
+// defaultV1 (system:1) is the first default: the graph of Default with
+// every edge asking (inner loop edges carry start: ask, which Hop ignores; the
+// loop has no advance, so they ask). Kept unchanged for runs that pin it.
+func defaultV1() Graph {
 	return Graph{
 		Start: "plan",
 		Nodes: []Node{
@@ -333,8 +404,8 @@ func DefaultResolved() Resolved {
 }
 
 // Options control scope-dependent validation. Whether an organization may
-// use auto edges at all (its switch and plan) is the host's policy, checked
-// with HasAuto.
+// use auto edges outside loops (its switch and plan) is the host's policy,
+// checked with HasAutoOutsideLoops.
 type Options struct {
 	// AllowStatusIDs permits team statuses (team and project flows).
 	AllowStatusIDs bool
@@ -436,6 +507,14 @@ func (g Resolved) Validate(opt Options) error {
 		}
 		if n.Type != NodeStatus && n.Status != nil {
 			add(n.Key, "status", "only status nodes set a status")
+		}
+		switch {
+		case !n.Location.Valid():
+			add(n.Key, "location", "location is inherit, cloud or local")
+		case n.Location != "" && n.Type != NodeAgent:
+			add(n.Key, "location", "only agent steps have a location")
+		case doc && n.Location == activity.RuleLocal:
+			add(n.Key, "location", "docs page steps run in the cloud")
 		}
 		switch n.Type {
 		case NodeAgent:
@@ -598,6 +677,9 @@ func (g Resolved) validateEdges(keys map[string]Node, member map[string]string, 
 			add(e.From, "edges", "start must be ask or auto")
 		}
 		fromLoop, toLoop := member[e.From], member[e.To]
+		if loop, inner := g.innerLoop(e); inner && e.Start != "" {
+			add(e.From, "edges", "steps inside loop %q follow the loop's advance setting, not the edge's start", loop.Key)
+		}
 		switch {
 		case e.From == e.To && !(toLoop != "" && isEntry(keys[toLoop], e.To)):
 			add(e.From, "edges", "a step cannot follow itself outside a loop")
@@ -704,10 +786,16 @@ func (g Graph) validateReach(keys map[string]Node, member map[string]string, add
 // Hop resolves where an edge leads: through status nodes (collected), into a
 // loop's first step, to an agent step or a stop. An edge that goes straight
 // (no status node between) from a step of a loop to that loop's first step
-// starts the loop's next iteration (Back).
+// starts the loop's next iteration (Back). An edge between two steps of the
+// same loop (InLoop) is automatic exactly when the loop advances by itself; its own
+// start is ignored (pinned versions may still carry one). The hop carries
+// the target step's location rule; the host fills its Location.
 func (g Resolved) Hop(e Edge) activity.FlowHop {
 	hop := activity.FlowHop{Auto: e.Auto()}
-	fromLoop, inLoop := g.LoopOf(e.From)
+	loop, inner := g.innerLoop(e)
+	if inner {
+		hop.Auto, hop.InLoop = loop.Loop != nil && loop.Loop.AutoAdvance(), true
+	}
 	for range MaxNodes + 1 {
 		n, ok := g.Node(e.To)
 		if !ok {
@@ -738,8 +826,8 @@ func (g Resolved) Hop(e Edge) activity.FlowHop {
 			}
 			n, _ = g.Node(n.Body[0])
 		}
-		hop.Node, hop.Name, hop.Runner = n.Key, cmp.Or(n.Name, n.Key), g.Runner(n.Key)
-		hop.Back = inLoop && len(hop.Statuses) == 0 && isEntry(fromLoop, n.Key)
+		hop.Node, hop.Name, hop.Runner, hop.Rule = n.Key, cmp.Or(n.Name, n.Key), g.Runner(n.Key), n.Location
+		hop.Back = inner && isEntry(loop, n.Key)
 		return hop
 	}
 	return hop
@@ -817,6 +905,7 @@ type ResultOf func(skillID string) (skill.Result, bool)
 // code skill are reported and left
 // without a runner, so Validate rejects them too. g is not modified.
 func (g Graph) Resolve(results ResultOf) (Resolved, Issues) {
+	g = g.normalized()
 	out := Resolved{Graph: g, runners: map[string]activity.Runner{}}
 	var issues Issues
 	for _, n := range g.Nodes {
@@ -848,8 +937,8 @@ func (g Graph) Resolve(results ResultOf) (Resolved, Issues) {
 	return out, issues
 }
 
-// Digest identifies a graph.
-func (g Graph) Digest() string { return activity.Digest(g) }
+// Digest identifies a graph; both spellings of a default hash alike.
+func (g Graph) Digest() string { return activity.Digest(g.normalized()) }
 
 // SkillIDs lists the distinct stored skills a graph uses (built-ins
 // excluded).
@@ -863,11 +952,13 @@ func (g Graph) SkillIDs() []string {
 	return out
 }
 
-// HasAuto reports whether any edge starts its step automatically, or a loop
-// fixes failed checks on its own (LoopPolicy.OnFailedCheck auto): both need
-// the host's auto-edge policy.
-func (g Graph) HasAuto() bool {
-	return slices.ContainsFunc(g.Edges, Edge.Auto) || slices.ContainsFunc(g.Nodes, func(n Node) bool {
-		return n.Type == NodeLoop && n.Loop != nil && n.Loop.OnFailedCheck == activity.FailedCheckAuto
+// HasAutoOutsideLoops reports whether an edge outside every loop (or into a
+// loop) starts its step automatically: the only automation the host's
+// auto-edge policy (organization switch and plan) gates. Hops inside a loop
+// follow its Advance and are bounded by the loop's own stops.
+func (g Graph) HasAutoOutsideLoops() bool {
+	return slices.ContainsFunc(g.Edges, func(e Edge) bool {
+		_, inner := g.innerLoop(e)
+		return e.Auto() && !inner
 	})
 }

@@ -433,17 +433,21 @@ func TestCompatFlowAttribution(t *testing.T) {
 // pins a failed-check round (hop "repeat", back), every in-loop successor
 // carries the round ledger, and checks carry their details. A run placed
 // without them (old refs, loops without checks) keeps its shape: no repeat
-// hop, no ledger key, and today's repeat behaviour.
+// hop, no ledger key, and today's repeat behaviour. 0.3.0: the system:1
+// ("old") hops are unchanged except the new in_loop marker on hops between
+// the loop's steps; Auto stays false (TestSystemV1HopsUnchangedExceptInLoop
+// pins the v0.2.0 literal). The checked loop moved from on_failed_check to
+// advance.
 func TestCompatLoopLedger(t *testing.T) {
 	sha := func(n int) string { return fmt.Sprintf("%040x", n) }
-	old := flow.DefaultResolved()
+	v1, _ := flow.BuiltinGraph(flow.VersionV1)
+	old, _ := v1.Resolve(nil)
 	oldBuild, ok := old.Ref("v1", "build", nil)
 	require.True(t, ok)
 
 	g := flow.Default()
 	g.Nodes[2].Requires.Checks = []string{"ci"}
 	g.Nodes[1].Loop.StallMatch = activity.StallLocation
-	g.Nodes[1].Loop.OnFailedCheck = activity.FailedCheckAuto
 	checked, _ := g.Resolve(nil)
 	build, ok := checked.Ref("v1", "build", nil)
 	require.True(t, ok)
@@ -464,5 +468,65 @@ func TestCompatLoopLedger(t *testing.T) {
 		"round_2":           round2,
 		"location_fingerprint": activity.FingerprintBy([]activity.Finding{{ID: "f", Severity: activity.High, Location: "a.go:12", Description: "x"}},
 			activity.StallLocation),
+	})
+}
+
+// Flow run UX (0.3.0): system:1 keeps its digest and hops for pinned runs
+// (every hop asks); system:2 advances its loop by itself and runs Review in
+// the cloud; runs carry step_mode, blocker_detail and pinned hop locations;
+// set_step_mode, and confirm / next with a location, are public commands.
+func TestCompatFlowRunUX(t *testing.T) {
+	v1, ok := flow.BuiltinGraph(flow.VersionV1)
+	require.True(t, ok)
+	// v0.2.0's flow.Default().Digest(): system:1 never changes under its id.
+	require.Equal(t, "995702d4f581e42eb3f23680b4b74a14b8b2578182763e952e17354e83aa9430", v1.Digest(), "system:1 never changes under its id")
+	refs := func(g flow.Graph, version string) map[string]activity.FlowRef {
+		r, issues := g.Resolve(nil)
+		require.Empty(t, issues)
+		out := map[string]activity.FlowRef{}
+		for _, key := range []string{"plan", "build", "review"} {
+			ref, ok := r.Ref(version, key, nil)
+			require.True(t, ok)
+			out[key] = ref
+		}
+		return out
+	}
+	owner := activity.Actor{OrgID: "org-1", UserID: "dev-1", Role: "member"}
+	build := refs(flow.Default(), flow.DefaultVersion)["build"]
+	done := build.Hops[activity.OutcomeDone]
+	done.Location = activity.Cloud
+	build.Hops[activity.OutcomeDone] = done
+	run := activity.Run{ID: "r1", OrgID: "org-1", Runner: activity.Code, State: activity.Submitted, Version: 3, OwnerID: "dev-1",
+		Location: activity.Local, StepMode: activity.StepModeAsk, Flow: &build}
+	_, auto := run.AutoHop()
+	next := activity.Command{Type: activity.Next, CommandKey: "k2", ExpectedVersion: 3, Location: activity.Local, StepMode: activity.StepModeFlow}
+	placed, err := run.Successor(owner, activity.Command{Type: activity.Next, ExpectedVersion: 3})
+	require.NoError(t, err)
+	chosen, err := run.Successor(owner, next)
+	require.NoError(t, err)
+	blocked := activity.Run{ID: "r2", OrgID: "org-1", Runner: activity.Code, State: activity.Running, Version: 4, OwnerID: "dev-1", Location: activity.Cloud}
+	require.NoError(t, blocked.Apply(activity.Actor{OrgID: "org-1", UserID: "dev-1", Purpose: activity.PurposeCoordinator},
+		activity.Command{Type: activity.Interrupt, ExpectedVersion: 4, Blocker: activity.BlockerSourceUnavailable, BlockerDetail: activity.BlockerDetailRepositoryUnreachable}))
+	blocked.UpdatedAt = at
+	golden(t, "flow_run_ux", map[string]any{
+		"default_version":       flow.DefaultVersion,
+		"v1_version":            flow.VersionV1,
+		"v1_digest":             v1.Digest(),
+		"v1_refs":               refs(v1, flow.VersionV1),
+		"v2_refs":               refs(flow.Default(), flow.DefaultVersion),
+		"v2_has_auto_outside":   flow.Default().HasAutoOutsideLoops(),
+		"run":                   run,
+		"paused_run_auto":       auto,
+		"allowed_commands":      run.AllowedCommands(owner),
+		"successor_placement":   map[string]any{"runner": placed.Runner, "location": placed.Location, "step_mode": placed.StepMode, "chosen": placed.LocationChosen},
+		"chosen_placement":      map[string]any{"runner": chosen.Runner, "location": chosen.Location, "step_mode": chosen.StepMode, "chosen": chosen.LocationChosen},
+		"can_choose_location":   run.CanChooseLocation(owner),
+		"set_step_mode_command": activity.Command{Type: activity.SetStepMode, CommandKey: "k1", ExpectedVersion: 3, StepMode: activity.StepModeFlow},
+		"next_command":          next,
+		"blocked_run":           blocked,
+		"blocker_details": []activity.BlockerDetail{activity.BlockerDetailRepositoryUnreachable,
+			activity.BlockerDetailAccessLost, activity.BlockerDetailInputsMoved},
+		"paused_reasons": []activity.AdvancePausedReason{activity.PausedOwnerInactive, activity.PausedProjectMoved,
+			activity.PausedAutoNotAllowed, activity.PausedNoProviderKey, activity.PausedRouteNotAllowed},
 	})
 }

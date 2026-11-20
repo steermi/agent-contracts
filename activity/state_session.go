@@ -31,7 +31,7 @@ func (r Run) ownedBy(a Actor) bool {
 // Only project-scoped sessions move between cloud and local.
 func (r Run) sessionAllows(t CommandType) bool {
 	switch t {
-	case Confirm, Next, ApplyFixes, Retry:
+	case Confirm, Next, ApplyFixes, Retry, SetStepMode:
 		return false
 	case TakeLocal, ResumeCloud:
 		return r.RunSubject().ScopeType == "project"

@@ -58,11 +58,25 @@ func validateLoop(n Node, keys map[string]Node, member map[string]string, add ad
 	default:
 		add(n.Key, "loop", "same problem is exact or location")
 	}
-	switch p.OnFailedCheck {
-	case "", activity.FailedCheckAsk, activity.FailedCheckAuto:
-	default:
-		add(n.Key, "loop", "when a check fails is ask or auto")
+	if !p.Advance.Valid() {
+		add(n.Key, "loop", "advance is ask or auto")
 	}
+}
+
+// innerLoop is the loop an edge stays inside: both its ends are steps of
+// that loop. Such an edge follows the loop's advance (never its own start)
+// and is bounded by the loop's stops; this is the one "same loop" rule.
+// Checking the edge's own ends is enough: a loop body holds only agent
+// steps, an edge into a body step must come from the same loop, and a
+// path step → status → own loop is a cycle Validate refuses
+// (TestNoStatusBetweenStepsOfOneLoop), so no status node sits between two
+// steps of one loop.
+func (g Graph) innerLoop(e Edge) (Node, bool) {
+	from, ok := g.LoopOf(e.From)
+	if !ok || !slices.Contains(from.Body, e.To) {
+		return Node{}, false
+	}
+	return from, true
 }
 
 func isEntry(loop Node, key string) bool { return len(loop.Body) > 0 && loop.Body[0] == key }
@@ -104,7 +118,7 @@ func (g Resolved) RefVia(versionID, key string, from *activity.Run, via activity
 	if loop.Loop != nil && g.Runner(key) == activity.Code && len(n.Requires.Checks) > 0 {
 		// A failed required check sends the round back to this step.
 		ref.Hops[activity.OutcomeRepeat] = activity.FlowHop{Node: key, Name: cmp.Or(n.Name, n.Key), Runner: activity.Code,
-			Back: true, Auto: loop.Loop.OnFailedCheck == activity.FailedCheckAuto}
+			Back: true, InLoop: true, Auto: loop.Loop.AutoAdvance(), Rule: n.Location}
 	}
 	if from != nil && from.Flow != nil && from.Flow.Loop != nil && from.Flow.Loop.Key == loop.Key && from.Flow.VersionID == versionID {
 		state := *from.Flow.Loop

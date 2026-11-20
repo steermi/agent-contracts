@@ -124,15 +124,17 @@ func TestAllowedCommandsFollowTheGuards(t *testing.T) {
 	viewer := Actor{UserID: "viewer", Role: "viewer"}
 	machine := Actor{UserID: "owner", Purpose: PurposeExecutor}
 	suggested := Run{Runner: Code, State: Suggested, OwnerID: "owner", Version: 1}
-	require.Equal(t, []CommandType{Confirm, Cancel}, suggested.AllowedCommands(owner))
-	require.Equal(t, []CommandType{Confirm, Cancel}, suggested.AllowedCommands(admin))
+	require.Equal(t, []CommandType{Confirm, Cancel}, suggested.AllowedCommands(owner), "off a flow: no step mode")
+	suggested.Flow = &FlowRef{VersionID: "v", Node: "build"}
+	require.Equal(t, []CommandType{Confirm, SetStepMode, Cancel}, suggested.AllowedCommands(owner))
+	require.Equal(t, []CommandType{Confirm, SetStepMode, Cancel}, suggested.AllowedCommands(admin))
 	require.Empty(t, suggested.AllowedCommands(reviewer))
 	require.Empty(t, suggested.AllowedCommands(viewer))
 	require.Empty(t, suggested.AllowedCommands(machine))
 
 	submitted := Run{Runner: Code, State: Submitted, OwnerID: "owner", Version: 1,
 		Flow: &FlowRef{VersionID: "v", Node: "build", Hops: map[Outcome]FlowHop{OutcomeDone: {Node: "review", Runner: Findings}}}}
-	require.Equal(t, []CommandType{Next}, submitted.AllowedCommands(owner), "authors never decide on their own work")
+	require.Equal(t, []CommandType{Next, SetStepMode}, submitted.AllowedCommands(owner), "authors never decide on their own work")
 	require.Equal(t, []CommandType{Decide}, submitted.AllowedCommands(reviewer))
 	submitted.Blocker = BlockerInputsChanged
 	require.Empty(t, submitted.AllowedCommands(reviewer), "stale evidence cannot be decided")
@@ -163,7 +165,8 @@ func TestSuccessorKinds(t *testing.T) {
 	owner := Actor{UserID: "owner", Role: "member"}
 	review := Run{Runner: Findings, State: Submitted, OwnerID: "owner", Version: 2, Recommendation: ChangesRequested,
 		Flow: &FlowRef{VersionID: "v", Node: "review", Hops: map[Outcome]FlowHop{OutcomeChangesRequested: {Node: "build", Runner: Code}}}}
-	kind, err := review.Successor(owner, Command{Type: ApplyFixes, ExpectedVersion: 2})
+	spawn, err := review.Successor(owner, Command{Type: ApplyFixes, ExpectedVersion: 2})
+	kind := spawn.Runner
 	require.NoError(t, err)
 	require.Equal(t, Code, kind)
 	_, err = review.Successor(owner, Command{Type: ApplyFixes, ExpectedVersion: 1})
@@ -192,6 +195,10 @@ func TestActivityRuleTargetsTeamStatus(t *testing.T) {
 			tt.t.ItemType, tt.t.Origin = "story", "user"
 			_, match := EvaluateRule(tt.rule, tt.t, Local, "")
 			require.Equal(t, tt.match, match)
+			// Matching never depends on where the run would execute.
+			require.Equal(t, tt.match, tt.rule.Matches(tt.t))
+			_, cloudMatch := EvaluateRule(tt.rule, tt.t, Cloud, "owner")
+			require.Equal(t, tt.match, cloudMatch)
 		})
 	}
 }

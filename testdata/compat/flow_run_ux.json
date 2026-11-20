@@ -1,0 +1,282 @@
+{
+  "allowed_commands": [
+    "next",
+    "set_step_mode"
+  ],
+  "blocked_run": {
+    "subject": {
+      "kind": "",
+      "id": "",
+      "scope_type": "",
+      "scope_id": ""
+    },
+    "id": "r2",
+    "project_id": "",
+    "work_item_id": "",
+    "runner": "code",
+    "state": "waiting",
+    "version": 5,
+    "generation": 0,
+    "input_digest": "",
+    "owner_id": "dev-1",
+    "execution_location": "cloud",
+    "origin": "",
+    "root_id": "",
+    "round": 0,
+    "cost": 0,
+    "output_contract": "",
+    "policy": {
+      "require_acceptance": false,
+      "quorum": 0,
+      "max_repair_rounds": 0,
+      "max_cost": 0
+    },
+    "blocker": "source_unavailable",
+    "blocker_detail": "repository_unreachable",
+    "created_at": "0001-01-01T00:00:00Z",
+    "updated_at": "2026-10-20T12:00:00Z"
+  },
+  "blocker_details": [
+    "repository_unreachable",
+    "access_lost",
+    "inputs_moved"
+  ],
+  "can_choose_location": true,
+  "chosen_placement": {
+    "chosen": true,
+    "location": "local",
+    "runner": "findings",
+    "step_mode": ""
+  },
+  "default_version": "system:2",
+  "next_command": {
+    "command": "next",
+    "command_key": "k2",
+    "expected_version": 3,
+    "step_mode": "flow",
+    "location": "local"
+  },
+  "paused_reasons": [
+    "owner_inactive",
+    "project_moved",
+    "auto_not_allowed",
+    "no_provider_key",
+    "route_not_allowed"
+  ],
+  "paused_run_auto": false,
+  "run": {
+    "flow": {
+      "version_id": "system:2",
+      "node": "build",
+      "hops": {
+        "done": {
+          "node": "review",
+          "name": "Review",
+          "runner": "findings",
+          "auto": true,
+          "in_loop": true,
+          "location_rule": "cloud",
+          "location": "cloud"
+        }
+      },
+      "loop": {
+        "key": "quality",
+        "max_iterations": 3,
+        "stop_below": "high",
+        "stall_rounds": 2,
+        "advance": "auto",
+        "iteration": 1,
+        "exhausted": {
+          "stop": "owner",
+          "approval": true
+        }
+      }
+    },
+    "subject": {
+      "kind": "",
+      "id": "",
+      "scope_type": "",
+      "scope_id": ""
+    },
+    "id": "r1",
+    "project_id": "",
+    "work_item_id": "",
+    "runner": "code",
+    "state": "submitted",
+    "version": 3,
+    "generation": 0,
+    "input_digest": "",
+    "owner_id": "dev-1",
+    "execution_location": "local",
+    "origin": "",
+    "root_id": "",
+    "round": 0,
+    "cost": 0,
+    "output_contract": "",
+    "policy": {
+      "require_acceptance": false,
+      "quorum": 0,
+      "max_repair_rounds": 0,
+      "max_cost": 0
+    },
+    "step_mode": "ask",
+    "created_at": "0001-01-01T00:00:00Z",
+    "updated_at": "0001-01-01T00:00:00Z"
+  },
+  "set_step_mode_command": {
+    "command": "set_step_mode",
+    "command_key": "k1",
+    "expected_version": 3,
+    "step_mode": "flow"
+  },
+  "successor_placement": {
+    "chosen": false,
+    "location": "cloud",
+    "runner": "findings",
+    "step_mode": "ask"
+  },
+  "v1_digest": "995702d4f581e42eb3f23680b4b74a14b8b2578182763e952e17354e83aa9430",
+  "v1_refs": {
+    "build": {
+      "version_id": "system:1",
+      "node": "build",
+      "hops": {
+        "done": {
+          "node": "review",
+          "name": "Review",
+          "runner": "findings",
+          "in_loop": true
+        }
+      },
+      "loop": {
+        "key": "quality",
+        "max_iterations": 3,
+        "stop_below": "high",
+        "stall_rounds": 2,
+        "iteration": 1,
+        "exhausted": {
+          "stop": "owner",
+          "approval": true
+        }
+      }
+    },
+    "plan": {
+      "version_id": "system:1",
+      "node": "plan",
+      "hops": {
+        "done": {
+          "node": "build",
+          "name": "Build",
+          "runner": "code"
+        }
+      }
+    },
+    "review": {
+      "version_id": "system:1",
+      "node": "review",
+      "hops": {
+        "approved": {
+          "statuses": [
+            {
+              "category": "in_review"
+            }
+          ],
+          "stop": "end"
+        },
+        "changes_requested": {
+          "node": "build",
+          "name": "Build",
+          "runner": "code",
+          "back": true,
+          "in_loop": true
+        }
+      },
+      "loop": {
+        "key": "quality",
+        "max_iterations": 3,
+        "stop_below": "high",
+        "stall_rounds": 2,
+        "iteration": 1,
+        "exhausted": {
+          "stop": "owner",
+          "approval": true
+        }
+      }
+    }
+  },
+  "v1_version": "system:1",
+  "v2_has_auto_outside": false,
+  "v2_refs": {
+    "build": {
+      "version_id": "system:2",
+      "node": "build",
+      "hops": {
+        "done": {
+          "node": "review",
+          "name": "Review",
+          "runner": "findings",
+          "auto": true,
+          "in_loop": true,
+          "location_rule": "cloud"
+        }
+      },
+      "loop": {
+        "key": "quality",
+        "max_iterations": 3,
+        "stop_below": "high",
+        "stall_rounds": 2,
+        "advance": "auto",
+        "iteration": 1,
+        "exhausted": {
+          "stop": "owner",
+          "approval": true
+        }
+      }
+    },
+    "plan": {
+      "version_id": "system:2",
+      "node": "plan",
+      "hops": {
+        "done": {
+          "node": "build",
+          "name": "Build",
+          "runner": "code"
+        }
+      }
+    },
+    "review": {
+      "version_id": "system:2",
+      "node": "review",
+      "hops": {
+        "approved": {
+          "statuses": [
+            {
+              "category": "in_review"
+            }
+          ],
+          "stop": "end"
+        },
+        "changes_requested": {
+          "node": "build",
+          "name": "Build",
+          "runner": "code",
+          "auto": true,
+          "back": true,
+          "in_loop": true
+        }
+      },
+      "loop": {
+        "key": "quality",
+        "max_iterations": 3,
+        "stop_below": "high",
+        "stall_rounds": 2,
+        "advance": "auto",
+        "iteration": 1,
+        "exhausted": {
+          "stop": "owner",
+          "approval": true
+        }
+      }
+    }
+  }
+}

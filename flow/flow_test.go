@@ -23,7 +23,7 @@ func resolved(g flow.Graph) flow.Resolved {
 func TestDefaultIsValid(t *testing.T) {
 	g := flow.DefaultResolved()
 	require.NoError(t, g.Validate(flow.Options{}))
-	assert.False(t, g.HasAuto(), "every default edge asks")
+	assert.False(t, g.HasAutoOutsideLoops(), "every default edge outside the loop asks")
 }
 
 func node(g *flow.Graph, key string) *flow.Node {
@@ -104,10 +104,10 @@ func TestValidate(t *testing.T) {
 func TestOptionalFeaturesValidWhenAllowed(t *testing.T) {
 	g := flow.Default()
 	node(&g, "build").Triggers[0].ToStatusID = "s1"
-	edge(&g, "build", activity.OutcomeDone).Start = flow.ModeAuto
+	edge(&g, "plan", activity.OutcomeDone).Start = flow.ModeAuto
 	node(&g, "review").Skill = "11111111-1111-1111-1111-111111111111"
 	require.NoError(t, resolved(g).Validate(flow.Options{AllowStatusIDs: true}))
-	assert.True(t, g.HasAuto())
+	assert.True(t, g.HasAutoOutsideLoops())
 	assert.Equal(t, []string{"11111111-1111-1111-1111-111111111111"}, g.SkillIDs())
 }
 
@@ -137,13 +137,13 @@ func TestRefResolvesHopsAndLoopState(t *testing.T) {
 	assert.Equal(t, 1, build.Loop.Iteration)
 	assert.Equal(t, 0.5, build.Loop.StartCost)
 	assert.Equal(t, activity.FlowHop{Stop: "owner", Approval: true}, build.Loop.Exhausted)
-	assert.Equal(t, activity.FlowHop{Node: "review", Name: "Review", Runner: activity.Findings}, build.Hops[activity.OutcomeDone])
+	assert.Equal(t, activity.FlowHop{Node: "review", Name: "Review", Runner: activity.Findings, Auto: true, InLoop: true, Rule: activity.RuleCloud}, build.Hops[activity.OutcomeDone])
 
 	out := []activity.OutputRef{{Kind: activity.RefRepository, RepositoryID: "r", CommitSHA: "0123456789012345678901234567890123456789"}}
 	review, _ := g.Ref("v1", "review", &activity.Run{Runner: activity.Code, Outputs: out, Flow: &build})
 	assert.Equal(t, 1, review.Loop.Iteration)
 	assert.Equal(t, activity.RevisionDigest(out), review.Loop.Revision)
-	assert.Equal(t, activity.FlowHop{Node: "build", Name: "Build", Runner: activity.Code, Back: true}, review.Hops[activity.OutcomeChangesRequested])
+	assert.Equal(t, activity.FlowHop{Node: "build", Name: "Build", Runner: activity.Code, Auto: true, Back: true, InLoop: true}, review.Hops[activity.OutcomeChangesRequested])
 	assert.Equal(t, activity.FlowHop{Statuses: []activity.StatusTarget{{Category: "in_review"}}, Stop: "end"}, review.Hops[activity.OutcomeApproved])
 
 	findings := []activity.Finding{{ID: "1", Severity: activity.High, Description: "bug"}}
@@ -175,7 +175,8 @@ func TestLoopEndToEndThroughContracts(t *testing.T) {
 	run := activity.Run{ID: "b1", Runner: activity.Code, State: activity.Submitted, Version: 1, OwnerID: "o", Location: activity.Cloud, Flow: &ref,
 		Outputs: []activity.OutputRef{{Kind: activity.RefRepository, ResourceID: "r", RepositoryID: "r", CommitSHA: "0123456789012345678901234567890123456789"}}}
 	for round := 1; round <= 3; round++ {
-		kind, err := run.Successor(owner, activity.Command{Type: activity.Next, ExpectedVersion: 1})
+		spawn, err := run.Successor(owner, activity.Command{Type: activity.Next, ExpectedVersion: 1})
+		kind := spawn.Runner
 		require.NoError(t, err)
 		require.Equal(t, activity.Findings, kind)
 		rref, _ := g.Ref("v", run.SuccessorNode(activity.Next), &run)
@@ -341,4 +342,157 @@ func TestRefCarriesRuleAttribution(t *testing.T) {
 	b, err := json.Marshal(activity.FlowRef{VersionID: "v1", Node: "plan"})
 	require.NoError(t, err)
 	assert.JSONEq(t, `{"version_id":"v1","node":"plan"}`, string(b), "unattributed refs keep their wire shape")
+}
+
+// system:1 stays resolvable for pinned runs and resolves to v0.2.0's hops
+// except the new in_loop marker on hops between its loop's steps: every hop
+// still asks (Auto false) and none carries a location rule. It is never
+// validated (its inner loop edges still carry start: ask).
+func TestSystemV1HopsUnchangedExceptInLoop(t *testing.T) {
+	g, ok := flow.BuiltinGraph(flow.VersionV1)
+	require.True(t, ok)
+	r, issues := g.Resolve(nil)
+	require.Empty(t, issues)
+	assert.False(t, g.HasAutoOutsideLoops())
+	refs := map[string]activity.FlowRef{}
+	for _, key := range []string{"plan", "build", "review"} {
+		refs[key], _ = r.Ref(flow.VersionV1, key, nil)
+	}
+	// The hops v0.2.0 pinned for system:1, literally.
+	v020 := map[string]map[activity.Outcome]activity.FlowHop{
+		"plan":  {activity.OutcomeDone: {Node: "build", Name: "Build", Runner: activity.Code}},
+		"build": {activity.OutcomeDone: {Node: "review", Name: "Review", Runner: activity.Findings}},
+		"review": {
+			activity.OutcomeChangesRequested: {Node: "build", Name: "Build", Runner: activity.Code, Back: true},
+			activity.OutcomeApproved:         {Statuses: []activity.StatusTarget{{Category: "in_review"}}, Stop: "end"},
+		},
+	}
+	// The only addition: in_loop on build → review and review → build.
+	inLoop := map[string]activity.Outcome{"build": activity.OutcomeDone, "review": activity.OutcomeChangesRequested}
+	for key, ref := range refs {
+		for o, hop := range ref.Hops {
+			assert.Equal(t, inLoop[key] == o, hop.InLoop, "%s %s in_loop", key, o)
+			assert.False(t, hop.Auto, "%s %s", key, o)
+			hop.InLoop = false
+			ref.Hops[o] = hop
+		}
+		assert.Equal(t, v020[key], ref.Hops, key)
+	}
+	require.NotNil(t, refs["build"].Loop)
+	assert.Equal(t, activity.FlowHop{Stop: "owner", Approval: true}, refs["build"].Loop.Exhausted)
+	assert.Empty(t, refs["build"].Loop.Advance)
+}
+
+// system:2 is the default: the loop advances by itself, Review runs in the
+// cloud, plan → loop still asks.
+func TestSystemV2Hops(t *testing.T) {
+	assert.Equal(t, "system:2", flow.DefaultVersion)
+	r := flow.DefaultResolved()
+	plan, _ := r.Ref(flow.DefaultVersion, "plan", nil)
+	build, _ := r.Ref(flow.DefaultVersion, "build", nil)
+	review, _ := r.Ref(flow.DefaultVersion, "review", nil)
+	assert.False(t, plan.Hops[activity.OutcomeDone].Auto, "plan → loop asks")
+	assert.False(t, plan.Hops[activity.OutcomeDone].InLoop, "entering a loop is outside it")
+	assert.Equal(t, activity.FlowHop{Node: "review", Name: "Review", Runner: activity.Findings, Auto: true, InLoop: true, Rule: activity.RuleCloud}, build.Hops[activity.OutcomeDone])
+	assert.Equal(t, activity.FlowHop{Node: "build", Name: "Build", Runner: activity.Code, Auto: true, Back: true, InLoop: true}, review.Hops[activity.OutcomeChangesRequested])
+	assert.False(t, review.Hops[activity.OutcomeApproved].Auto)
+	assert.False(t, review.Hops[activity.OutcomeApproved].InLoop)
+	assert.False(t, build.Loop.Exhausted.InLoop)
+	assert.Equal(t, activity.LoopAdvanceAuto, build.Loop.Advance)
+}
+
+func TestInnerLoopEdgeStart(t *testing.T) {
+	g := flow.Default()
+	edge(&g, "build", activity.OutcomeDone).Start = flow.ModeAsk
+	err := resolved(g).Validate(flow.Options{})
+	require.ErrorIs(t, err, flow.ErrInvalid, "start on an inner loop edge is refused on save")
+	// Resolving ignores it: the loop decides.
+	ref, _ := resolved(g).Ref("v", "build", nil)
+	assert.True(t, ref.Hops[activity.OutcomeDone].Auto)
+
+	g = flow.Default()
+	node(&g, "quality").Loop.Advance = ""
+	edge(&g, "build", activity.OutcomeDone).Start = flow.ModeAuto
+	ref, _ = resolved(g).Ref("v", "build", nil)
+	assert.False(t, ref.Hops[activity.OutcomeDone].Auto, "an inner edge's auto never overrides an asking loop")
+	assert.False(t, g.HasAutoOutsideLoops())
+}
+
+func TestNodeLocationValidation(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		edit func(*flow.Graph)
+		ok   bool
+	}{
+		{"inherit", func(g *flow.Graph) { node(g, "build").Location = activity.RuleInherit }, true},
+		{"local", func(g *flow.Graph) { node(g, "build").Location = activity.RuleLocal }, true},
+		{"unknown", func(g *flow.Graph) { node(g, "build").Location = "moon" }, false},
+		{"not an agent", func(g *flow.Graph) { node(g, "end").Location = activity.RuleCloud }, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			g := flow.Default()
+			tc.edit(&g)
+			err := resolved(g).Validate(flow.Options{})
+			if tc.ok {
+				assert.NoError(t, err)
+			} else {
+				assert.ErrorIs(t, err, flow.ErrInvalid)
+			}
+		})
+	}
+	doc := flow.DefaultFor(flow.SubjectDocPage)
+	node(&doc, "fix").Location = activity.RuleLocal
+	r, _ := doc.Resolve(nil)
+	assert.ErrorIs(t, r.Validate(flow.Options{}), flow.ErrInvalid, "docs page steps run in the cloud")
+}
+
+// Go-built graphs pass the same normalization as decoded ones: an explicit
+// inherit / ask hashes like an omitted one and hops pin "" (never inherit).
+func TestGoBuiltGraphNormalized(t *testing.T) {
+	explicit := flow.Default()
+	node(&explicit, "build").Location = activity.RuleInherit
+	node(&explicit, "quality").Loop.Advance = activity.LoopAdvanceAsk
+	omitted := flow.Default()
+	node(&omitted, "quality").Loop.Advance = ""
+	assert.Equal(t, omitted.Digest(), explicit.Digest())
+	assert.Equal(t, activity.RuleInherit, node(&explicit, "build").Location, "Digest does not modify the graph")
+	r, issues := explicit.Resolve(nil)
+	require.Empty(t, issues)
+	plan, _ := r.Ref("v", "plan", nil)
+	assert.Empty(t, plan.Hops[activity.OutcomeDone].Rule, "hops pin one spelling")
+	build, _ := r.Ref("v", "build", nil)
+	assert.Empty(t, build.Loop.Advance)
+	assert.False(t, build.Hops[activity.OutcomeDone].Auto)
+}
+
+// A status node never sits between two steps of one loop: a body holds only
+// agent steps, a status cannot point at a body step, and step → status →
+// own loop is a cycle. So innerLoop needs only an edge's own ends.
+func TestNoStatusBetweenStepsOfOneLoop(t *testing.T) {
+	for name, edit := range map[string]func(*flow.Graph){
+		"status in a body":         func(g *flow.Graph) { node(g, "quality").Body = []string{"build", "in_review", "review"} },
+		"status into a body step":  func(g *flow.Graph) { edge(g, "in_review", activity.OutcomeDone).To = "review" },
+		"step → status → own loop": func(g *flow.Graph) { edge(g, "in_review", activity.OutcomeDone).To = "quality" },
+	} {
+		t.Run(name, func(t *testing.T) {
+			g := flow.Default()
+			edit(&g)
+			assert.ErrorIs(t, resolved(g).Validate(flow.Options{}), flow.ErrInvalid)
+		})
+	}
+}
+
+func TestDecodeStoresDefaultsEmpty(t *testing.T) {
+	explicit := `{"start":"plan","nodes":[{"key":"plan","type":"agent","name":"Plan","skill":"steermi:plan","location":"inherit"},` +
+		`{"key":"quality","type":"loop","name":"Q","body":["build"],"loop":{"max_iterations":2,"advance":"ask"}},` +
+		`{"key":"build","type":"agent","name":"Build","skill":"steermi:build"}],"edges":[]}`
+	omitted := `{"start":"plan","nodes":[{"key":"plan","type":"agent","name":"Plan","skill":"steermi:plan"},` +
+		`{"key":"quality","type":"loop","name":"Q","body":["build"],"loop":{"max_iterations":2}},` +
+		`{"key":"build","type":"agent","name":"Build","skill":"steermi:build"}],"edges":[]}`
+	var a, b flow.Graph
+	require.NoError(t, json.Unmarshal([]byte(explicit), &a))
+	require.NoError(t, json.Unmarshal([]byte(omitted), &b))
+	assert.Equal(t, b.Digest(), a.Digest(), "an explicit default and an omitted one are one flow")
+	assert.Empty(t, a.Nodes[0].Location)
+	assert.Empty(t, a.Nodes[1].Loop.Advance)
 }

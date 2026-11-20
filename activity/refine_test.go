@@ -19,7 +19,8 @@ func TestRefineSpawnsSameStepWithFeedback(t *testing.T) {
 	require.Contains(t, r.AllowedCommands(owner), Refine)
 	require.Equal(t, "plan", r.SuccessorNode(Refine))
 
-	kind, err := r.Successor(owner, Command{Type: Refine, ExpectedVersion: 2, Reason: "RIDE is a cycling game, not motorsport."})
+	spawn, err := r.Successor(owner, Command{Type: Refine, ExpectedVersion: 2, Reason: "RIDE is a cycling game, not motorsport."})
+	kind := spawn.Runner
 	require.NoError(t, err)
 	require.Equal(t, Answer, kind)
 
@@ -37,25 +38,25 @@ func TestRefineGuard(t *testing.T) {
 	other := Actor{UserID: "other", Role: "member"}
 	admin := Actor{UserID: "admin", Role: "admin"}
 	r := submittedPlan()
-	require.ErrorIs(t, r.guard(other, Refine), ErrForbidden)
-	require.NoError(t, r.guard(admin, Refine))
-	require.ErrorIs(t, r.guard(Actor{UserID: "owner", Role: "member", Purpose: PurposeFlow}, Refine), ErrForbidden)
+	require.ErrorIs(t, r.stateGuard(other, Refine), ErrForbidden)
+	require.NoError(t, r.stateGuard(admin, Refine))
+	require.ErrorIs(t, r.stateGuard(Actor{UserID: "owner", Role: "member", Purpose: PurposeFlow}, Refine), ErrForbidden)
 
 	running := submittedPlan()
 	running.State = Running
-	require.ErrorIs(t, running.guard(owner, Refine), ErrConflict)
+	require.ErrorIs(t, running.stateGuard(owner, Refine), ErrConflict)
 
 	review := submittedPlan()
 	review.Runner = Findings
-	require.ErrorIs(t, review.guard(owner, Refine), ErrConflict)
+	require.ErrorIs(t, review.stateGuard(owner, Refine), ErrConflict)
 
 	noOutput := submittedPlan()
 	noOutput.Outputs = nil
-	require.ErrorIs(t, noOutput.guard(owner, Refine), ErrConflict)
+	require.ErrorIs(t, noOutput.stateGuard(owner, Refine), ErrConflict)
 
 	stale := submittedPlan()
 	stale.Blocker = BlockerInputsChanged
-	require.ErrorIs(t, stale.guard(owner, Refine), ErrStale)
+	require.ErrorIs(t, stale.stateGuard(owner, Refine), ErrStale)
 }
 
 func TestNewRunKeepsFeedback(t *testing.T) {

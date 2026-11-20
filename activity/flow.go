@@ -71,7 +71,59 @@ type FlowHop struct {
 	Approval bool `json:"approval,omitempty"`
 	// Back: the hop starts the next iteration of the run's loop.
 	Back bool `json:"back,omitempty"`
+	// InLoop: the hop leads to a step of the same quality loop, so the
+	// loop's advance decided Auto and its own stops bound it. Hops pinned
+	// before this field read false (treated as outside a loop).
+	InLoop bool `json:"in_loop,omitempty"`
+	// Rule is the target step's location rule as the flow version states it
+	// (flow.Node.Location; empty = RuleInherit).
+	Rule LocationRule `json:"location_rule,omitempty"`
+	// Location is where the hop's step runs, resolved by the host from Rule
+	// (and its own defaults) when it places the run and pins the hop. Empty
+	// on hops the host did not resolve (stops, older pins): such a hop is
+	// never automatic.
+	Location Location `json:"location,omitempty"`
 }
+
+// LocationRule is a flow step's location setting: inherit (the default when
+// empty), or always cloud or local. Hosts resolve inherit to a Location.
+type LocationRule string
+
+const (
+	RuleInherit LocationRule = "inherit"
+	RuleCloud   LocationRule = "cloud"
+	RuleLocal   LocationRule = "local"
+)
+
+// Valid reports whether l is empty (= inherit) or a known rule.
+func (l LocationRule) Valid() bool {
+	return l == "" || l == RuleInherit || l == RuleCloud || l == RuleLocal
+}
+
+// Fixed returns the location a cloud or local rule names; ok is false for
+// inherit, which the host resolves.
+func (l LocationRule) Fixed() (Location, bool) {
+	switch l {
+	case RuleCloud:
+		return Cloud, true
+	case RuleLocal:
+		return Local, true
+	}
+	return "", false
+}
+
+// LoopAdvance is how a quality loop moves between its own steps: auto
+// starts the next step (or round) without a person, ask (the default when
+// empty) waits for one. Edges outside the loop keep their own start.
+type LoopAdvance string
+
+const (
+	LoopAdvanceAuto LoopAdvance = "auto"
+	LoopAdvanceAsk  LoopAdvance = "ask"
+)
+
+// Valid reports whether a is empty (= ask) or a known mode.
+func (a LoopAdvance) Valid() bool { return a == "" || a == LoopAdvanceAuto || a == LoopAdvanceAsk }
 
 // LoopPolicy bounds a quality loop.
 type LoopPolicy struct {
@@ -88,12 +140,14 @@ type LoopPolicy struct {
 	// (default when empty) compares severity, location and wording;
 	// location ignores wording (FingerprintBy).
 	StallMatch StallMatch `json:"stall_match,omitempty"`
-	// OnFailedCheck: what a failed required check of a code step inside the
-	// loop does (FailedCheckAsk when empty): the round goes back to that
-	// step, started by a person (ask) or by the flow (auto, under the
-	// host's auto-edge policy).
-	OnFailedCheck string `json:"on_failed_check,omitempty"`
+	// Advance decides every hop between the loop's own steps (build →
+	// review, review → build, failed-check rounds): auto starts them without
+	// a person, ask (default when empty) waits.
+	Advance LoopAdvance `json:"advance,omitempty"`
 }
+
+// AutoAdvance reports whether the loop starts its own steps by itself.
+func (p LoopPolicy) AutoAdvance() bool { return p.Advance == LoopAdvanceAuto }
 
 // StallMatch is how a loop compares findings across rounds.
 type StallMatch string
@@ -101,12 +155,6 @@ type StallMatch string
 const (
 	StallExact    StallMatch = "exact"
 	StallLocation StallMatch = "location"
-)
-
-// Failed-check modes of a loop (LoopPolicy.OnFailedCheck).
-const (
-	FailedCheckAsk  = "ask"
-	FailedCheckAuto = "auto"
 )
 
 // LoopState is a run's place in a quality loop.
@@ -340,15 +388,42 @@ func (r Run) SuccessorNode(t CommandType) string {
 	return ""
 }
 
-// AutoHop is the hop the run's outcome follows without a person: an edge set
-// to auto into an agent step that the run's quality loop did not stop, on a
-// cloud run (local runs never auto-chain). It is the single eligibility check
-// for automatic advances: hosts record and follow them with it and the
-// PurposeFlow guard admits Next only when it holds. Whether the organization
-// allows auto edges at all is the host's policy.
+// AutoHop is the hop the run's outcome follows without a person: an auto hop
+// (an auto edge, or a hop inside a loop set to advance automatically) into
+// an agent step that the run's quality loop did not stop, pinned to run in
+// the cloud, while the run's step mode is not ask. The run's own location
+// does not matter: a local Build continues into a cloud Review; a hop pinned
+// local (or not resolved) always waits for a developer. It is the single
+// eligibility check for automatic advances: hosts record and follow them
+// with it and the PurposeFlow guard admits Next only when it holds. Whether
+// the organization allows auto edges outside loops is the host's policy.
 func (r Run) AutoHop() (FlowHop, bool) {
 	hop, stop, ok := r.FlowNext()
-	return hop, ok && stop == "" && hop.Auto && hop.Runner != "" && r.Location == Cloud
+	return hop, ok && stop == "" && hop.Auto && hop.Runner != "" && r.StepMode != StepModeAsk && hop.Location == Cloud
+}
+
+// AdvancePausedReason is why the host did not start a hop AutoHop admitted
+// (the hop stays for a person): the owner left, the project moved to
+// another team, the organization does not allow auto edges outside loops,
+// or no model can be called in the cloud (no provider key, or the AI policy
+// forbids the route).
+type AdvancePausedReason string
+
+const (
+	PausedOwnerInactive   AdvancePausedReason = "owner_inactive"
+	PausedProjectMoved    AdvancePausedReason = "project_moved"
+	PausedAutoNotAllowed  AdvancePausedReason = "auto_not_allowed"
+	PausedNoProviderKey   AdvancePausedReason = "no_provider_key"
+	PausedRouteNotAllowed AdvancePausedReason = "route_not_allowed"
+)
+
+// Valid reports whether p is a known reason.
+func (p AdvancePausedReason) Valid() bool {
+	switch p {
+	case PausedOwnerInactive, PausedProjectMoved, PausedAutoNotAllowed, PausedNoProviderKey, PausedRouteNotAllowed:
+		return true
+	}
+	return false
 }
 
 // flowGuard admits the flow advancer: only Next, only for the run's owner,

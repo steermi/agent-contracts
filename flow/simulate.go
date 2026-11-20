@@ -17,7 +17,7 @@ const SameAsBefore = "same"
 
 // CheckFailed scripts a code step whose required checks failed (the same
 // failed job on every visit). Inside a loop it starts a failed-check round
-// (LoopPolicy.OnFailedCheck); elsewhere the step repeats.
+// (automatic when the loop's Advance is auto); elsewhere the step repeats.
 const CheckFailed = "check_failed"
 
 // MaxSimulatedSteps bounds a simulation.

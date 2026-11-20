@@ -5,9 +5,89 @@ All notable changes to this module are listed here. The format follows
 [semantic versioning](https://semver.org/) (0.x: minor versions may break the
 API).
 
-## Unreleased
+## 0.3.0 - unreleased
 
 ### Added
+
+- Flow run UX (testdata `flow_run_ux.json`, new):
+  - `activity.Run.BlockerDetail` (`blocker_detail`, `BlockerDetail`:
+    `repository_unreachable`, `access_lost`, `inputs_moved`): a
+    safe cause code beside `Blocker`, set by the host through the internal
+    `Command.BlockerDetail` on `Interrupt` and cleared by any other command
+    that changes the blocker. Each detail explains only its blockers
+    (`BlockerDetail.Explains`: `repository_unreachable` / `access_lost` →
+    `source_unavailable`, `inputs_moved` → `inputs_changed`; an unknown
+    detail explains nothing); `Interrupt` refuses any other pairing with
+    `ErrValidation`. Budget blockers name their cause already and carry no
+    detail.
+  - `activity.LoopPolicy.Advance` (`advance`, `LoopAdvance`: `auto` | `ask`,
+    missing = `ask`; an explicit `ask` is normalized to empty) and
+    `LoopPolicy.AutoAdvance`: every hop between steps of
+    the same loop (and its failed-check rounds) is automatic exactly when the
+    loop advances by itself.
+  - Agent node `location` (`activity.LocationRule`: `RuleInherit`
+    `inherit` | `RuleCloud` `cloud` | `RuleLocal` `local`, missing =
+    `inherit`; `Valid`, `Fixed`), validated (agent steps
+    only; docs page steps never `local`). `activity.FlowHop.Rule`
+    (`location_rule`) carries the target step's rule; `FlowHop.Location`
+    (`location`, `cloud` | `local`) is filled by the host when it places a
+    run. `FlowHop.InLoop` (`in_loop`) is pinned on hops between steps of the
+    same loop (and the failed-check round): the loop's `advance` decided
+    `Auto` and the loop's stops bound it, so hosts gate only hops without
+    it on their auto-edge policy (hops pinned before read false).
+  - `activity.Run.StepMode` / `Request.StepMode` (`step_mode`, `StepMode`:
+    `flow` | `ask`, missing = `flow`): "pause after each step". One
+    representation: empty and `flow` both mean flow, a run stores flow as
+    `""` (stored runs without the field read flow) and ask as `ask`.
+    `NewRun` validates the request's mode and takes it as given (empty =
+    flow, never the parent's); a successor gets the chain's mode through
+    `SuccessorRun.StepMode`. `StepMode.OrDefault` is the effective mode
+    hosts show.
+  - Command `set_step_mode` (`SetStepMode`, public, in `AllowedCommands`):
+    owner or manager as a person, on a run placed on a flow that can still
+    continue (not terminal, no final blocker, and once submitted only while
+    it has a next step); `Command.StepMode` (`step_mode`) is required there
+    and optional on `confirm` and `next`, where the same rule applies (a
+    person, a run whose flow can continue; else `ErrForbidden` /
+    `ErrConflict`, so a `confirm` with a mode on a run off a flow is
+    refused). The guard table admits every
+    command with its choices (location, step mode) in one place, so
+    `AllowedCommands`, `Apply`, `Successor` and `CanChooseLocation` agree.
+  - `Command.Location` (`location`): optional on `confirm` of a suggestion
+    (it runs there; a waiting run moves with `take_local` / `resume_cloud`)
+    and on `next` (the successor runs there). Owner only, as a person; docs
+    page runs stay cloud.
+  - `Run.Successor(Actor, Command) (SuccessorRun, error)` (was `(Runner,
+    error)`): one pass returns the follow-up's `Runner`, its `Location`
+    (the person's `next` location with `LocationChosen`, else the pinned
+    hop's location, else the run's own) and its `StepMode` (the person's
+    `next` choice, else the chain's, stored as a run stores it). Hosts
+    request successors with all of it, and `NewRun` takes the placement as
+    given.
+  - `Run.CanChooseLocation(Actor)`: whether the person may pick where the
+    next start runs (a suggestion's `confirm`, else `next`, with a
+    location), asked of the guard table; hosts no longer probe commands.
+  - `activity.Rule.Matches(Transition)`: whether a board rule fires on a
+    transition wherever its run would execute; `EvaluateRule` is built on
+    it (unchanged results). Hosts skip non-matching rules before resolving
+    a location.
+  - `activity.AdvancePausedReason` (`owner_inactive`, `project_moved`,
+    `auto_not_allowed`, `no_provider_key`, `route_not_allowed`; `Valid`):
+    why a host did not start a hop `AutoHop` admitted.
+  - `OutputRef.Normalize` and `OutputRefError` (wraps `ErrValidation`,
+    names the field): `kind` must be a known ref kind; a repository output's
+    `resource_id` and `repository_id` fill each other and its `commit_sha`
+    must be a full SHA (40 or 64 hex, lower-cased); other outputs need
+    `resource_id`. `Normalize` fills fields and then runs the same check of
+    what a ref names that `Validate` runs (`Validate` adds the host-resolved
+    revision and hash). Agents' tools, the
+    CLI and the host normalize submissions with it instead of their own
+    copies.
+  - `flow.VersionV1` (`system:1`), resolvable through `BuiltinGraph` for
+    pinned runs; its digest is unchanged and its hops are unchanged except
+    the new `in_loop` marker on build → review and review → build; `Auto`
+    stays false on every hop (`TestSystemV1HopsUnchangedExceptInLoop` pins
+    the v0.2.0 hop literal).
 
 - `flow.Script.Valid`, `flow.ValidScripted` and `flow.MaxScriptedVisits`:
   the simulator's script vocabulary (edge outcomes, `SameAsBefore`,
@@ -78,6 +158,11 @@ API).
   "mark one page as superseded") and never name actions, tools, commands or
   field names there. Only those two skills' digests change
   (`skills_flows.json`, `doc_page_v2.json`).
+- `skill/builtin` 0.10.4: `steermi:build` writes branches, commits and merge
+  requests in its build report and comments as markdown links built from the
+  `web_url` its git tools return, never an invented URL (`SKILL.md`,
+  `build-report-template.md`; merge requests linked as !N or #N, never `<!N>`). Only that skill's digest changes
+  (`skills_flows.json`, `builtin_version` 0.10.4).
 - `skill.SourcesKey` (`steermi-sources`, optional, comma separated) with
   `Skill.Sources` / `Skill.WantsSource`: extra sources a skill asks the host
   to pin; `related-docs` (`SourceRelatedDocs`) asks for the subject page's
@@ -183,6 +268,49 @@ API).
 
 ### Changed
 
+- `flow.DefaultVersion` is `system:2` and `flow.Default()` returns its graph:
+  the inner loop edges (build → review, review → build) have no `start`,
+  the quality loop has `advance: auto`, Review has `location: cloud`.
+  Plan → loop still asks. It is written out as its own graph, never derived
+  from `system:1`.
+- `flow.Resolved.Hop` ignores `start` on an edge between two steps of the
+  same loop (the loop's `advance` decides) and fills `FlowHop.Rule`;
+  `Resolved.Validate` refuses `start` on such edges. Pinned versions are
+  resolved, never validated.
+- `activity.Run.AutoHop` is `hop.Auto && StepMode != ask && hop.Location ==
+  cloud` (plus the loop stops); it no longer reads the run's own location,
+  so a local run continues into a cloud step and a hop pinned local (or not
+  resolved) always waits. The `PurposeFlow` guard (`flowGuard`) is the only
+  place it is decided: `Run.Successor` admits the flow advancer only while
+  it holds and places the successor at the hop's location; `NewRun` takes
+  that placement and starts a `PurposeFlow` successor `ready` without
+  re-deriving it.
+- "Same loop" is one rule (an edge whose ends are both steps of one loop)
+  shared by `Resolved.Hop`, validation, `Graph.HasAutoOutsideLoops` and
+  `flow.Default()`. Its ends suffice: a loop body holds only agent steps
+  and validation refuses any path step → status → step of the same loop
+  (`TestNoStatusBetweenStepsOfOneLoop`).
+- Flow defaults have one spelling: an explicit `inherit` location or `ask`
+  advance is normalized to empty in one place that decoded graphs
+  (`UnmarshalJSON`) and Go-built graphs (`Resolve`, `Digest`) all pass, so
+  both spellings are one flow and one digest and hops pin `location_rule`
+  `""` for inherit, never `inherit`.
+- One "owner, as a person" rule (`ownerAsPerson`) for `take_local`,
+  `resume_cloud`, `retry` and the location choice.
+- `OutputRef`, `RefKind` and the step-mode / blocker-detail / command
+  choice rules moved out of `activity/state.go` into `output_ref.go` and
+  `state_choices.go` (no API change).
+- The `TakeLocal` / `ResumeCloud` guard comment: a suggestion moves with
+  `confirm`'s location.
+- `testdata/compat`: `skills_flows.json`, `doc_page.json`
+  (`work_item_default_digest`), `flow_attribution.json` and
+  `loop_ledger.json` follow `system:2` (inner hops carry `in_loop`).
+  `loop_ledger.json` `old_build` now pins `system:1`: its hops are v0.2.0's
+  except the new `in_loop: true` on the inner hop; `auto` stays absent
+  (false). `flow_run_ux.json` pins `blocker_detail` on an interrupted run,
+  the successor placement (`step_mode` `""` for flow), `can_choose_location`
+  and the paused reasons, and asserts `system:1`'s digest equals v0.2.0's
+  default.
 - `flow.DefaultDocVersion` is `system:doc:2` and `DefaultFor(doc_page)`
   returns its graph: Docs reconcile (page trigger `published`, ask) →
   `changes_requested` (ask) → Docs fix → End; `approved` → End. Hosts that
@@ -195,11 +323,20 @@ API).
   list `doc_page` in `starts_from` (derived from their result; skill digests
   and the default flow are unchanged). Hosts that list skills per subject
   start offering them on docs pages; older CLIs are unaffected.
-
 - `skill/builtin` 0.9.0: `steermi:org-design`, `steermi:initiative-planning`
   and `steermi:sprint-planning` declare `steermi-effort: medium`, so a host
   that floors effort by the skill (Steermi cloud runs) gives them at least
   medium while lighter skills keep the organization's default.
+
+### Removed
+
+- `activity.LoopPolicy.OnFailedCheck` (`on_failed_check`) and
+  `FailedCheckAsk` / `FailedCheckAuto`: the failed-check repeat hop follows
+  the loop's `advance`. Stored flows carrying `on_failed_check` no longer
+  decode (graphs decode strictly).
+- `flow.Graph.HasAuto`, replaced by `HasAutoOutsideLoops` (only `start:
+  auto` edges outside loops, the automation the host's auto-edge policy
+  gates).
 
 ## 0.1.0 - 2026-11-10
 

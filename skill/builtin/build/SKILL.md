@@ -41,7 +41,9 @@ revision and a build report, never with your own approval.
 6. **Submit** the repository identity and full commit SHA (and the merge
    request when applicable) with submit_activity_outputs, with a summary
    following [build-report-template.md](build-report-template.md). Use
-   comments for implementation notes.
+   comments for implementation notes. Write branches, commits and merge
+   requests as markdown links with the `web_url` your git tools return
+   (`[!12](https://…)`, ``[`3f2a9c1d`](https://…)``); never invent a URL.
 
 ## Applying review findings
 

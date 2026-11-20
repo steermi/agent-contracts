@@ -115,7 +115,8 @@ func TestDocPageRunSubmitsAndSpawnsSuccessors(t *testing.T) {
 	page := OutputRef{Kind: RefDocs, ResourceID: "page-1", AreaID: "area-1", Revision: "4", Hash: strings.Repeat("a", 64)}
 	require.NoError(t, r.Apply(owner, Command{Type: Submit, ExpectedVersion: r.Version, Outputs: []OutputRef{page}}))
 	assert.Equal(t, Submitted, r.State)
-	runner, err := r.Successor(owner, Command{Type: Refine, ExpectedVersion: r.Version, Reason: "Shorter"})
+	spawn, err := r.Successor(owner, Command{Type: Refine, ExpectedVersion: r.Version, Reason: "Shorter"})
+	runner := spawn.Runner
 	require.NoError(t, err)
 	assert.Equal(t, Answer, runner)
 	next, err := NewRun("run-2", "org", "", "", owner, Request{Runner: Findings, Location: Cloud, InputDigest: "page@4", Subject: r.Subject}, &r)

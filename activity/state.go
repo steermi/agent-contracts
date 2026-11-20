@@ -5,7 +5,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
-	"regexp"
 	"slices"
 	"strings"
 	"time"
@@ -83,15 +82,6 @@ const (
 	PurposeFlow Purpose = "flow"
 )
 
-type RefKind string
-
-const (
-	RefRepository RefKind = "repository"
-	RefDocs       RefKind = "docs"
-	RefWorkItem   RefKind = "work_item"
-	RefContext    RefKind = "context"
-)
-
 type DecisionKind string
 
 const (
@@ -162,6 +152,10 @@ const (
 	// findings run aside (Finding.DismissalReason): applied by hand, or not
 	// worth acting on. It never changes the evidence digest.
 	DismissFinding CommandType = "dismiss_finding"
+	// SetStepMode changes the run's StepMode while its flow runs (owner or
+	// manager; any non-terminal run, so also a submitted run whose next hop
+	// has not started yet).
+	SetStepMode CommandType = "set_step_mode"
 	// MaxDismissalReasonRunes bounds a DismissFinding reason.
 	MaxDismissalReasonRunes = 600
 	// Internal commands; never accepted from an API caller.
@@ -177,7 +171,7 @@ const (
 // Public reports whether API callers may send the command.
 func (t CommandType) Public() bool {
 	switch t {
-	case CloseMeeting, StopMeetingTurn, Continue, Confirm, Retry, Clarify, TakeLocal, ResumeCloud, Cancel, Submit, SubmitFindings, Decide, Revise, Next, ApplyFixes, Refine, DismissFinding:
+	case CloseMeeting, StopMeetingTurn, Continue, Confirm, Retry, Clarify, TakeLocal, ResumeCloud, Cancel, Submit, SubmitFindings, Decide, Revise, Next, ApplyFixes, Refine, DismissFinding, SetStepMode:
 		return true
 	}
 	return false
@@ -227,65 +221,6 @@ func (p Policy) Validate() error {
 
 func (p Policy) allowsReviewer(userID string) bool {
 	return len(p.ReviewerIDs) == 0 || slices.Contains(p.ReviewerIDs, userID)
-}
-
-type OutputRef struct {
-	Restricted   bool    `json:"restricted,omitempty"`
-	Kind         RefKind `json:"kind"`
-	ResourceID   string  `json:"resource_id"`
-	AreaID       string  `json:"area_id,omitempty"`
-	Revision     string  `json:"revision,omitempty"`
-	RepositoryID string  `json:"repository_id,omitempty"`
-	CommitSHA    string  `json:"commit_sha,omitempty"`
-	Hash         string  `json:"hash,omitempty"`
-}
-
-var fullSHA = regexp.MustCompile(`^[a-f0-9]{40}([a-f0-9]{24})?$`)
-
-func (o OutputRef) Validate() error {
-	if o.ResourceID == "" {
-		return ErrValidation
-	}
-	switch o.Kind {
-	case RefRepository:
-		if o.RepositoryID == "" || !fullSHA.MatchString(o.CommitSHA) {
-			return ErrValidation
-		}
-	case RefDocs, RefWorkItem, RefContext:
-		if o.Revision == "" || len(o.Hash) != 64 {
-			return ErrValidation
-		}
-	default:
-		return ErrValidation
-	}
-	return nil
-}
-
-// Sources returns the refs that are not resolved project context.
-func Sources(refs []OutputRef) []OutputRef {
-	return slices.DeleteFunc(slices.Clone(refs), func(ref OutputRef) bool { return ref.Kind == RefContext })
-}
-
-// RepositoryIDs lists the repositories pinned by refs, in order.
-func RepositoryIDs(refs []OutputRef) []string {
-	var ids []string
-	for _, ref := range refs {
-		if ref.Kind == RefRepository && !slices.Contains(ids, ref.RepositoryID) {
-			ids = append(ids, ref.RepositoryID)
-		}
-	}
-	return ids
-}
-
-// AreaIDs lists the docs areas of pinned docs refs, in order.
-func AreaIDs(refs []OutputRef) []string {
-	var ids []string
-	for _, ref := range refs {
-		if ref.Kind == RefDocs && ref.AreaID != "" && !slices.Contains(ids, ref.AreaID) {
-			ids = append(ids, ref.AreaID)
-		}
-	}
-	return ids
 }
 
 type Finding struct {
@@ -404,8 +339,15 @@ type Run struct {
 	Decisions   []Decision      `json:"decisions,omitempty"`
 	Policy      Policy          `json:"policy"`
 	Blocker     Blocker         `json:"blocker,omitempty"`
-	CreatedAt   time.Time       `json:"created_at"`
-	UpdatedAt   time.Time       `json:"updated_at"`
+	// StepMode is the person's choice over automatic hops, stored empty for
+	// flow and "ask" for ask; set at request, Confirm, Next or SetStepMode
+	// and carried to successors (SuccessorRun).
+	StepMode StepMode `json:"step_mode,omitempty"`
+	// BlockerDetail names the cause behind Blocker when the host knows it
+	// (set by Interrupt, cleared with the blocker).
+	BlockerDetail BlockerDetail `json:"blocker_detail,omitempty"`
+	CreatedAt     time.Time     `json:"created_at"`
+	UpdatedAt     time.Time     `json:"updated_at"`
 }
 type Request struct {
 	Skill                *SkillRef `json:"skill,omitempty"`
@@ -431,7 +373,10 @@ type Request struct {
 	// SkillInputs is the validated value of the skill's inputs schema. Hosts
 	// validate it (skill.Skill.Inputs) and fold it into InputDigest.
 	SkillInputs json.RawMessage `json:"skill_inputs,omitempty"`
-	Policy      Policy          `json:"-"`
+	// StepMode is the new run's step mode (empty = flow). A successor takes
+	// SuccessorRun.StepMode, which carries the chain's.
+	StepMode StepMode `json:"step_mode,omitempty"`
+	Policy   Policy   `json:"-"`
 }
 type Command struct {
 	MeetingRecapSaved bool           `json:"-"`
@@ -453,9 +398,17 @@ type Command struct {
 	// FindingID names the finding a DismissFinding command sets aside.
 	FindingID string `json:"finding_id,omitempty"`
 	Check     *Check `json:"check,omitempty"`
+	// StepMode: SetStepMode's new mode (required); optional on Confirm and
+	// on Next (the successor's mode, Run.Successor).
+	StepMode StepMode `json:"step_mode,omitempty"`
+	// Location: optional on Confirm of a suggestion (it runs there) and on
+	// Next (the successor runs there, Run.Successor). Owner only.
+	Location Location `json:"location,omitempty"`
 	// Internal payloads, never decoded from API bodies.
 	Blocker Blocker `json:"-"`
-	Cost    float64 `json:"-"`
+	// BlockerDetail travels with Blocker on Interrupt (Run.BlockerDetail).
+	BlockerDetail BlockerDetail `json:"-"`
+	Cost          float64       `json:"-"`
 	// DroppedFindings is set by the host on SubmitFindings: how many
 	// submitted findings it dropped before the command (Run.DroppedFindings).
 	DroppedFindings int `json:"-"`
@@ -463,7 +416,7 @@ type Command struct {
 
 func NewRun(id, org, project, item string, a Actor, q Request, parent *Run) (Run, error) {
 	d, ok := Lookup(q.Runner)
-	if !ok || id == "" || org == "" || a.UserID == "" || q.InputDigest == "" || !q.Location.Valid() {
+	if !ok || id == "" || org == "" || a.UserID == "" || q.InputDigest == "" || !q.Location.Valid() || !q.StepMode.Valid() {
 		return Run{}, ErrValidation
 	}
 	subject := q.Subject
@@ -497,6 +450,7 @@ func NewRun(id, org, project, item string, a Actor, q Request, parent *Run) (Run
 		OutputContract: string(q.Runner) + "/1", Capabilities: d.Capabilities, Policy: p, CreatedAt: now, UpdatedAt: now,
 	}
 	r.Subject = subject
+	r.StepMode = q.StepMode.stored()
 	r.Feedback = strings.TrimSpace(q.Feedback)
 	if len(q.SkillInputs) > 0 {
 		r.SkillInputs = append(json.RawMessage(nil), q.SkillInputs...)
@@ -546,8 +500,10 @@ func NewRun(id, org, project, item string, a Actor, q Request, parent *Run) (Run
 	case r.Round >= 3 && q.Location == Cloud && (r.Flow == nil || r.Flow.Loop == nil):
 		// Inside a quality loop its MaxIterations bounds the rounds instead.
 		r.State, r.Blocker = Waiting, BlockerReassessment
-	case a.Purpose == PurposeFlow && q.Location == Cloud:
-		// An auto edge starts the successor without a confirmation.
+	case a.Purpose == PurposeFlow:
+		// An automatic hop starts without a confirmation. Successor's guard
+		// (flowGuard: AutoHop) admitted it and placed it on the hop's
+		// location; NewRun takes that placement as given.
 		r.State = Ready
 	}
 	return r, nil
@@ -632,10 +588,20 @@ func (r Run) HumanAccepted() bool {
 	return accepted >= max(r.Policy.Quorum, 1)
 }
 
-// guard is the single eligibility rule: who may issue a command in which
-// state. Apply and Successor add payload validation; AllowedCommands lists
-// the commands whose guard passes.
-func (r Run) guard(a Actor, t CommandType) error {
+// guard is the single eligibility rule: who may issue a command, with its
+// choices (location, step mode), in which state. Apply, Successor,
+// AllowedCommands and CanChooseLocation all ask it; apply adds only payload
+// validation.
+func (r Run) guard(a Actor, c Command) error {
+	if err := r.stateGuard(a, c.Type); err != nil {
+		return err
+	}
+	return r.choiceGuard(a, c)
+}
+
+// stateGuard is guard's table of who may issue a command type in which
+// state.
+func (r Run) stateGuard(a Actor, t CommandType) error {
 	owner := r.ownedBy(a)
 	if sessionCommands[t] {
 		return r.sessionGuard(a, t, owner)
@@ -668,11 +634,11 @@ func (r Run) guard(a Actor, t CommandType) error {
 			return ErrConflict
 		}
 	case TakeLocal, ResumeCloud:
-		if a.UserID != r.OwnerID || a.Purpose != "" {
+		if !r.ownerAsPerson(a) {
 			return ErrForbidden
 		}
-		// A suggestion is confirmed at its location; moving applies once a run
-		// is underway or interrupted.
+		// A suggestion moves with Confirm's location; moving applies once a
+		// run is underway or interrupted.
 		if r.State == Suggested || r.State == Submitted || r.State == Completed || r.State == Cancelled {
 			return ErrConflict
 		}
@@ -716,7 +682,7 @@ func (r Run) guard(a Actor, t CommandType) error {
 			return ErrForbidden
 		}
 	case Retry:
-		if a.UserID != r.OwnerID || a.Purpose != "" {
+		if !r.ownerAsPerson(a) {
 			return ErrForbidden
 		}
 		if r.State != Failed {
@@ -744,6 +710,13 @@ func (r Run) guard(a Actor, t CommandType) error {
 			return ErrStale
 		}
 		if _, rework := r.reworkHop(); t == Next && r.NextRunner() == "" || t == ApplyFixes && (r.Runner != Findings || r.State != Submitted || !rework) {
+			return ErrConflict
+		}
+	case SetStepMode:
+		if !manager || !a.human() {
+			return ErrForbidden
+		}
+		if !r.stepModeOpen() {
 			return ErrConflict
 		}
 	case DismissFinding:
@@ -779,7 +752,7 @@ func (r Run) guard(a Actor, t CommandType) error {
 }
 
 // userCommands are the commands a person can act on from the run's controls.
-var userCommands = []CommandType{CloseMeeting, StopMeetingTurn, Continue, Confirm, Retry, TakeLocal, ResumeCloud, Next, ApplyFixes, Refine, Submit, SubmitFindings, Decide, DismissFinding, Cancel}
+var userCommands = []CommandType{CloseMeeting, StopMeetingTurn, Continue, Confirm, Retry, TakeLocal, ResumeCloud, Next, ApplyFixes, Refine, Submit, SubmitFindings, Decide, DismissFinding, SetStepMode, Cancel}
 
 // AllowedCommands lists the controls this person may use now. Machine callers
 // act through their own protocols and get none.
@@ -789,7 +762,7 @@ func (r Run) AllowedCommands(a Actor) []CommandType {
 		return out
 	}
 	for _, t := range userCommands {
-		if r.guard(a, t) == nil {
+		if r.guard(a, Command{Type: t}) == nil {
 			out = append(out, t)
 		}
 	}
@@ -797,30 +770,32 @@ func (r Run) AllowedCommands(a Actor) []CommandType {
 }
 
 // Successor validates a command that starts a follow-up run and returns the
-// follow-up's runner. The coordinator resolves its inputs and creates it.
-func (r Run) Successor(a Actor, c Command) (Runner, error) {
+// follow-up: runner, location and step mode, decided in one pass. The
+// coordinator resolves its inputs and creates it.
+func (r Run) Successor(a Actor, c Command) (SuccessorRun, error) {
 	if !c.Type.spawns() {
-		return "", ErrValidation
+		return SuccessorRun{}, ErrValidation
 	}
 	if c.ExpectedVersion != r.Version {
-		return "", ErrStale
+		return SuccessorRun{}, ErrStale
 	}
-	if err := r.guard(a, c.Type); err != nil {
-		return "", err
+	if err := r.guard(a, c); err != nil {
+		return SuccessorRun{}, err
 	}
 	switch c.Type {
 	case Retry:
-		return r.Runner, nil
+		return r.successorRun(c, r.Runner, FlowHop{}), nil
 	case Refine:
 		if f := strings.TrimSpace(c.Reason); f == "" || utf8.RuneCountInString(f) > MaxFeedbackRunes {
-			return "", ErrValidation
+			return SuccessorRun{}, ErrValidation
 		}
-		return r.Runner, nil
+		return r.successorRun(c, r.Runner, FlowHop{}), nil
 	case ApplyFixes:
 		hop, _ := r.reworkHop()
-		return hop.Runner, nil
+		return r.successorRun(c, hop.Runner, hop), nil
 	}
-	return r.NextRunner(), nil
+	hop, _, _ := r.FlowNext()
+	return r.successorRun(c, hop.Runner, hop), nil
 }
 
 // Apply validates before changing the snapshot. Persistence and idempotency are
@@ -832,7 +807,7 @@ func (r *Run) Apply(a Actor, c Command) error {
 	if c.Type.spawns() {
 		return ErrValidation
 	}
-	if err := r.guard(a, c.Type); err != nil {
+	if err := r.guard(a, c); err != nil {
 		return err
 	}
 	next := *r
@@ -842,6 +817,11 @@ func (r *Run) Apply(a Actor, c Command) error {
 	next.Findings = slices.Clone(r.Findings)
 	if err := next.apply(a, c); err != nil {
 		return err
+	}
+	// The detail explains the blocker an Interrupt set; any other command
+	// that changes the blocker drops it.
+	if c.Type != Interrupt && next.Blocker != r.Blocker {
+		next.BlockerDetail = ""
 	}
 	next.Version++
 	next.UpdatedAt = time.Now().UTC()
@@ -858,7 +838,20 @@ func (r *Run) apply(a Actor, c Command) error {
 	}
 	switch c.Type {
 	case Confirm:
+		// Only a suggestion takes a location (choiceGuard): it has no
+		// execution yet. A waiting run moves with TakeLocal/ResumeCloud.
+		if c.Location != "" {
+			r.Location = c.Location
+		}
+		if c.StepMode != "" {
+			r.StepMode = c.StepMode.stored()
+		}
 		r.State, r.Blocker = Ready, ""
+	case SetStepMode:
+		if c.StepMode == "" {
+			return ErrValidation
+		}
+		r.StepMode = c.StepMode.stored()
 	case Start:
 		r.State = Running
 	case Clarify:
@@ -885,13 +878,13 @@ func (r *Run) apply(a Actor, c Command) error {
 	case Handoff:
 		r.State, r.Blocker = Waiting, BlockerAwaitingResume
 	case Interrupt:
-		if c.Blocker == "" {
+		if c.Blocker == "" || !c.BlockerDetail.Explains(c.Blocker) {
 			return ErrValidation
 		}
-		r.State, r.Blocker = Waiting, c.Blocker
+		r.State, r.Blocker, r.BlockerDetail = Waiting, c.Blocker, c.BlockerDetail
 		if r.IsSessionWorkflow() {
 			r.Generation++
-			r.State, r.Blocker = Waiting, BlockerMeetingInput
+			r.State, r.Blocker, r.BlockerDetail = Waiting, BlockerMeetingInput, ""
 			r.Summary = string(c.Blocker)
 		} else if c.Blocker == BlockerInputsChanged {
 			r.State = Cancelled

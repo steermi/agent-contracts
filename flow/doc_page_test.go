@@ -15,7 +15,7 @@ func TestDefaultsPerSubject(t *testing.T) {
 	assert.Equal(t, flow.Default(), flow.DefaultFor(""), "an unset subject is a work item")
 	assert.Equal(t, flow.Default(), flow.DefaultFor(flow.SubjectWorkItem))
 	assert.Equal(t, flow.DefaultVersion, flow.DefaultVersionFor(""))
-	assert.Equal(t, "system:1", flow.DefaultVersionFor(flow.SubjectWorkItem))
+	assert.Equal(t, "system:2", flow.DefaultVersionFor(flow.SubjectWorkItem))
 	assert.Equal(t, "system:doc:2", flow.DefaultVersionFor(flow.SubjectDocPage))
 	assert.Empty(t, flow.DefaultVersionFor("repository"))
 	assert.Empty(t, flow.DefaultFor("repository").Nodes, "unknown subjects have no default")
@@ -26,7 +26,7 @@ func TestDefaultsPerSubject(t *testing.T) {
 	r, issues := doc.Resolve(nil)
 	require.Empty(t, issues)
 	require.NoError(t, r.Validate(flow.Options{}))
-	assert.False(t, r.HasAuto())
+	assert.False(t, r.HasAutoOutsideLoops())
 	assert.Empty(t, r.Rules())
 	assert.Equal(t, []flow.PageStepRule{
 		{Node: "reconcile", Runner: activity.Findings, Trigger: activity.PageTrigger{Event: activity.PageEventPublished, Mode: flow.ModeAsk}},
@@ -73,7 +73,7 @@ func TestBuiltinGraphs(t *testing.T) {
 	require.True(t, ok)
 	assert.Equal(t, "steermi:plan", step.Skill, "pinned v1 runs keep their one Plan step")
 	assert.Empty(t, r.PageRules())
-	for _, bad := range []string{"", "system:2", "system:doc:3", "flow-version-uuid"} {
+	for _, bad := range []string{"", "system:3", "system:doc:3", "flow-version-uuid"} {
 		_, ok := flow.BuiltinGraph(bad)
 		assert.False(t, ok, bad)
 	}

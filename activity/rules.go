@@ -17,19 +17,32 @@ func NormalizeStatus(s string) string {
 	}
 	return s
 }
-func EvaluateRule(r Rule, t Transition, location Location, owner string) (State, bool) {
+
+// Matches reports whether the rule fires on the transition, wherever its
+// run would execute: activity-caused moves never fire, category rules fire
+// on a category change, status rules on entering their status (including a
+// move between statuses of one category), and the rule's runner, mode, from
+// and to statuses and item type must fit. Hosts use it to skip rules before
+// resolving a location; EvaluateRule is built on it.
+func (r Rule) Matches(t Transition) bool {
 	if t.Origin == "activity" || t.CausationID != "" {
-		return Suggested, false
+		return false
 	}
-	// Category rules fire on a category change; status rules on entering
-	// their status, including a move between statuses of one category.
 	if r.ToStatusID == "" && t.FromStatus == t.ToStatus || r.ToStatusID != "" && (t.ToStatusID != r.ToStatusID || t.FromStatusID == t.ToStatusID) {
-		return Suggested, false
+		return false
 	}
 	if _, ok := Lookup(r.Runner); !ok {
-		return Suggested, false
+		return false
 	}
-	if r.Mode == "off" || r.FromStatus != "*" && NormalizeStatus(r.FromStatus) != NormalizeStatus(t.FromStatus) || NormalizeStatus(r.ToStatus) != NormalizeStatus(t.ToStatus) || r.ItemType != "*" && r.ItemType != t.ItemType {
+	return r.Mode != "off" && (r.FromStatus == "*" || NormalizeStatus(r.FromStatus) == NormalizeStatus(t.FromStatus)) &&
+		NormalizeStatus(r.ToStatus) == NormalizeStatus(t.ToStatus) && (r.ItemType == "*" || r.ItemType == t.ItemType)
+}
+
+// EvaluateRule reports whether the rule fires (Rule.Matches) and the state
+// of the run it starts: an auto rule starts a cloud run (waiting without an
+// automation owner); everything else is a suggestion.
+func EvaluateRule(r Rule, t Transition, location Location, owner string) (State, bool) {
+	if !r.Matches(t) {
 		return Suggested, false
 	}
 	if r.Mode == "auto" && location == Cloud {

@@ -24,7 +24,8 @@ func TestFlowSuccessorFollowsPinnedHops(t *testing.T) {
 	}}
 	require.Equal(t, Answer, review.NextRunner())
 	require.Equal(t, "notes", review.SuccessorNode(Next))
-	kind, err := review.Successor(owner, Command{Type: Next, ExpectedVersion: 1})
+	spawn, err := review.Successor(owner, Command{Type: Next, ExpectedVersion: 1})
+	kind := spawn.Runner
 	require.NoError(t, err)
 	require.Equal(t, Answer, kind)
 
@@ -61,7 +62,8 @@ func TestOneMoreRoundPastLoopStop(t *testing.T) {
 	require.Equal(t, BlockerRepairLimit, stop, "the loop stops at its iteration limit")
 	_, err := r.Successor(owner, Command{Type: Next, ExpectedVersion: 1})
 	require.ErrorIs(t, err, ErrConflict, "Next follows the stopped loop to a person")
-	kind, err := r.Successor(owner, Command{Type: ApplyFixes, ExpectedVersion: 1})
+	spawn, err := r.Successor(owner, Command{Type: ApplyFixes, ExpectedVersion: 1})
+	kind := spawn.Runner
 	require.NoError(t, err, "a person may still ask for one more round")
 	require.Equal(t, Code, kind)
 }
@@ -143,7 +145,7 @@ func TestFlowAdvancerGuard(t *testing.T) {
 	flowActor := Actor{OrgID: "o", UserID: "owner", Purpose: PurposeFlow}
 	base := func() Run {
 		r := Run{Runner: Code, State: Submitted, Version: 1, OwnerID: "owner", Location: Cloud, Flow: loopRef("build", 1)}
-		r.Flow.Hops = map[Outcome]FlowHop{OutcomeDone: {Node: "review", Runner: Findings, Auto: true}}
+		r.Flow.Hops = map[Outcome]FlowHop{OutcomeDone: {Node: "review", Runner: Findings, Auto: true, Location: Cloud}}
 		return r
 	}
 	tests := []struct {
@@ -155,7 +157,14 @@ func TestFlowAdvancerGuard(t *testing.T) {
 		{"ask hop", func(r *Run, _ *Actor, _ *CommandType) {
 			r.Flow.Hops[OutcomeDone] = FlowHop{Node: "review", Runner: Findings}
 		}, ErrConflict},
-		{"local run", func(r *Run, _ *Actor, _ *CommandType) { r.Location = Local }, ErrConflict},
+		{"local run, cloud hop", func(r *Run, _ *Actor, _ *CommandType) { r.Location = Local }, nil},
+		{"local hop", func(r *Run, _ *Actor, _ *CommandType) {
+			r.Flow.Hops[OutcomeDone] = FlowHop{Node: "review", Runner: Findings, Auto: true, Location: Local}
+		}, ErrConflict},
+		{"unresolved hop", func(r *Run, _ *Actor, _ *CommandType) {
+			r.Flow.Hops[OutcomeDone] = FlowHop{Node: "review", Runner: Findings, Auto: true}
+		}, ErrConflict},
+		{"paused after each step", func(r *Run, _ *Actor, _ *CommandType) { r.StepMode = StepModeAsk }, ErrConflict},
 		{"other user", func(_ *Run, a *Actor, _ *CommandType) { a.UserID = "x" }, ErrForbidden},
 		{"apply fixes", func(_ *Run, _ *Actor, c *CommandType) { *c = ApplyFixes }, ErrForbidden},
 		{"blocked", func(r *Run, _ *Actor, _ *CommandType) { r.Blocker = BlockerExecutionBusy }, ErrStale},
@@ -179,7 +188,7 @@ func TestFlowAdvancerGuard(t *testing.T) {
 
 func TestAutoHop(t *testing.T) {
 	r := Run{Runner: Code, State: Submitted, Location: Cloud, Flow: loopRef("build", 1)}
-	r.Flow.Hops = map[Outcome]FlowHop{OutcomeDone: {Node: "review", Runner: Findings, Auto: true}}
+	r.Flow.Hops = map[Outcome]FlowHop{OutcomeDone: {Node: "review", Runner: Findings, Auto: true, Location: Cloud}}
 	hop, ok := r.AutoHop()
 	require.True(t, ok)
 	assert.Equal(t, "review", hop.Node)
@@ -194,7 +203,18 @@ func TestAutoHop(t *testing.T) {
 	local := r
 	local.Location = Local
 	_, ok = local.AutoHop()
-	assert.False(t, ok, "local runs never auto-chain")
+	assert.True(t, ok, "a local run continues into a cloud step")
+
+	localHop := r
+	localHop.Flow = loopRef("build", 1)
+	localHop.Flow.Hops = map[Outcome]FlowHop{OutcomeDone: {Node: "review", Runner: Findings, Auto: true, Location: Local}}
+	_, ok = localHop.AutoHop()
+	assert.False(t, ok, "a developer starts a local step")
+
+	paused := r
+	paused.StepMode = StepModeAsk
+	_, ok = paused.AutoHop()
+	assert.False(t, ok, "pause after each step")
 
 	toStop := r
 	toStop.Flow = loopRef("build", 1)
@@ -204,14 +224,28 @@ func TestAutoHop(t *testing.T) {
 }
 
 func TestFlowSpawnedRunStartsReady(t *testing.T) {
-	parent := Run{ID: "p", RootID: "p", Runner: Code, State: Submitted, OwnerID: "owner", Location: Cloud}
+	// A local Build whose auto hop is pinned to the cloud.
+	parent := Run{ID: "p", RootID: "p", Runner: Code, State: Submitted, OwnerID: "owner", Location: Local, Flow: loopRef("build", 1)}
+	parent.Flow.Hops = map[Outcome]FlowHop{OutcomeDone: {Node: "review", Runner: Findings, Auto: true, Location: Cloud}}
+	flowActor := Actor{UserID: "owner", Purpose: PurposeFlow}
 	q := Request{Runner: Findings, Location: Cloud, InputDigest: "x", Flow: loopRef("review", 1)}
-	r, err := NewRun("r", "o", "p", "i", Actor{UserID: "owner", Purpose: PurposeFlow}, q, &parent)
+	r, err := NewRun("r", "o", "p", "i", flowActor, q, &parent)
 	require.NoError(t, err)
 	assert.Equal(t, Ready, r.State)
 	r, err = NewRun("r", "o", "p", "i", Actor{UserID: "owner", Role: "member"}, q, &parent)
 	require.NoError(t, err)
 	assert.Equal(t, Suggested, r.State)
+
+	// Successor decides the automatic hop once (flowGuard: AutoHop) and
+	// places it where the hop is pinned; NewRun takes that placement.
+	placed, err := parent.Successor(flowActor, Command{Type: Next})
+	require.NoError(t, err)
+	assert.Equal(t, SuccessorRun{Runner: Findings, Location: Cloud}, placed, "the flow starts the hop where it is pinned")
+	ask := parent
+	ask.Flow = loopRef("build", 1)
+	ask.Flow.Hops = map[Outcome]FlowHop{OutcomeDone: {Node: "review", Runner: Findings, Location: Cloud}}
+	_, err = ask.Successor(flowActor, Command{Type: Next})
+	require.ErrorIs(t, err, ErrConflict, "the flow starts only automatic hops")
 }
 
 func TestLoopReplacesReassessment(t *testing.T) {

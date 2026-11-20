@@ -27,7 +27,7 @@ import (
 
 // Version identifies the built-in skill content. Bump it with every content
 // change and add a Changelog line.
-const Version = "0.10.3"
+const Version = "0.10.4"
 
 // Prefix marks built-in skill identities ("steermi:plan", the plugin:skill
 // form of Claude Code; URL-safe, so built-ins share the skill routes).
@@ -35,6 +35,7 @@ const Prefix = "steermi:"
 
 // Changelog lists what changed per version, newest first.
 var Changelog = []Change{
+	{Version: "0.10.4", Note: "Build writes branches, commits and merge requests in its report and comments as markdown links with the web_url its git tools return, never an invented URL."},
 	{Version: "0.10.3", Note: "Docs reconcile and Docs fix write what people read (finding descriptions, rationales, summaries) in plain language and never name actions, tools, commands or field names there."},
 	{Version: "0.10.2", Note: "Docs reconcile requires a subject_quote on every finding and a target_quote on a finding with a doc_page target (hosts drop findings without them)."},
 	{Version: "0.10.1", Note: "Docs reconcile states the direction of mark_superseded: the subject page replaces the target; a target that replaces the subject is marked with a rationale starting \"Reverse:\"."},
