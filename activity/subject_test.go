@@ -17,9 +17,9 @@ func TestSessionSubjectPlan(t *testing.T) {
 	require.False(t, r.Capabilities.Allows("update_work_item"))
 	require.Equal(t, Waiting, r.State)
 	require.Equal(t, BlockerMeetingInput, r.Blocker)
-	require.NotContains(t, r.AllowedCommands(actor), TakeLocal)
-	require.NotContains(t, r.AllowedCommands(actor), Confirm)
-	require.Contains(t, r.AllowedCommands(actor), Continue)
+	require.NotContains(t, r.AllowedCommands(actor, HostFacts{}), TakeLocal)
+	require.NotContains(t, r.AllowedCommands(actor, HostFacts{}), Confirm)
+	require.Contains(t, r.AllowedCommands(actor, HostFacts{}), Continue)
 	v := r.Version
 	require.NoError(t, r.Apply(actor, Command{Type: Continue, ExpectedVersion: v}))
 	require.Equal(t, Ready, r.State)
@@ -60,7 +60,7 @@ func TestMeetingContinueAuthority(t *testing.T) {
 		require.ErrorIs(t, r.Apply(actor, Command{Type: Continue, ExpectedVersion: r.Version}), ErrForbidden)
 	}
 	require.NoError(t, r.Apply(Actor{UserID: "participant", Role: "member"}, Command{Type: Continue, ExpectedVersion: r.Version}))
-	require.NotContains(t, r.AllowedCommands(Actor{UserID: "participant", Role: "member"}), Continue)
+	require.NotContains(t, r.AllowedCommands(Actor{UserID: "participant", Role: "member"}, HostFacts{}), Continue)
 }
 
 func TestMeetingStopFencesTurnAndAllowsExplicitNextTurn(t *testing.T) {
@@ -91,7 +91,7 @@ func TestMeetingFailedTurnAllowsExplicitRecovery(t *testing.T) {
 			require.NoError(t, run.Apply(actor, command))
 			require.Equal(t, Waiting, run.State)
 			require.Equal(t, BlockerMeetingInput, run.Blocker)
-			require.Contains(t, run.AllowedCommands(human), Continue)
+			require.Contains(t, run.AllowedCommands(human, HostFacts{}), Continue)
 		})
 	}
 }

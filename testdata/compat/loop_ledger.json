@@ -31,7 +31,8 @@
       "iteration": 1,
       "exhausted": {
         "stop": "owner",
-        "approval": true
+        "approval": true,
+        "stop_name": "Needs a decision"
       }
     }
   },
@@ -56,7 +57,8 @@
       "iteration": 1,
       "exhausted": {
         "stop": "owner",
-        "approval": true
+        "approval": true,
+        "stop_name": "Owner decides"
       }
     }
   },
@@ -92,7 +94,8 @@
         "iteration": 1,
         "exhausted": {
           "stop": "owner",
-          "approval": true
+          "approval": true,
+          "stop_name": "Needs a decision"
         }
       }
     },
@@ -191,7 +194,8 @@
       "revision": "2a1e331ddeba4adea4e4a07a1d807de6df935ce847a440094a20f5091a7a50c6",
       "exhausted": {
         "stop": "owner",
-        "approval": true
+        "approval": true,
+        "stop_name": "Needs a decision"
       },
       "ledger": [
         {

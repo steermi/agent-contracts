@@ -5,7 +5,154 @@ All notable changes to this module are listed here. The format follows
 [semantic versioning](https://semver.org/) (0.x: minor versions may break the
 API).
 
-## 0.3.0 - unreleased
+## 0.4.0 - unreleased
+
+Release order: service first, then the CLI. The CLI must bump with this
+release: a CLI on 0.3.1 or older does not know `review_inconclusive` or the
+new stall rules, so `steermi done` mis-renders inconclusive and stalled
+loops (and a decided approval) of runs the service placed with 0.4.0.
+Older CLIs keep working otherwise: they read `approval` on a hop and ignore
+the new fields.
+
+### Added
+
+- Approval nodes that decide (testdata `approval.json`, new):
+  - `flow`: an approval node may have `approved` and `changes_requested`
+    edges (each at most once; none = the plain hand-off as before) and
+    `approver` (`flow.Node.Approver`, `activity.Approver`: `owner` default,
+    stored as absent | `team_managers` | `reviewers`; `Valid`, `OrDefault`).
+    `Resolved.Outcomes` lists them; validation lets only edges leaving an
+    approval close a cycle outside a loop and refuses a decision that leads
+    back to an approval without a step. Back into a loop goes through the
+    loop node; `RefVia(…, next)` counts that re-entry as a round (`retry` and
+    `refine` never do). Docs page approval nodes are decided by the run's
+    owner only (`team_managers` / `reviewers` refused).
+  - `activity.FlowHop`: `stop_name`, `approver` and `decide` (the pinned hop
+    of each decision, nested) on hops that end at an approval node.
+  - Commands `approve_step` / `request_step_changes` (`ApproveStep`,
+    `RequestStepChanges`; public, in `AllowedCommands`, not spawning;
+    `CommandType.IsStepDecision`), recorded as `Run.StepDecisions`
+    (`StepDecision`: `node`, `outcome`, `user_id`, `reason`,
+    `evidence_digest`, `at`). Admitted while the run waits at the node
+    (below) for the node's approver (`owner` = the run's owner;
+    `team_managers` = `HostFacts.TeamManager`; `reviewers` = a listed
+    `Policy.ReviewerIDs` member, else `HostFacts.ProjectWriter` other than
+    the owner) or an organization owner or admin, as a person: forbidden,
+    then stale (a blocker), then conflict (not waiting, no edge for the
+    decision, fenced). One decision per stop; a reason (≤
+    `MaxFeedbackRunes`) is required for `request_step_changes`.
+  - `HostFacts` (`TeamManager`, `ProjectWriter`, `Fence`): what the host
+    knows about one run (and the person acting on it) for one call, passed
+    as `Command.Facts` (`Apply`, `Successor`) and to
+    `AllowedCommands(actor, facts)`. Only step decisions read them; the
+    zero value admits only the owner, listed reviewers and organization
+    owners/admins. `DecisionFence` (`Superseded`, `Moved`, `Unknown`;
+    `Fences`): a decision that could never take effect is refused
+    (`ErrConflict`; `Unknown` → `ErrSourceUnavailable`) and the run does not
+    wait.
+  - `Run.Approval(fence)` (`ApprovalStop`: the node the run waits at
+    undecided, else the one the latest decision was made at; `Waiting` is
+    the one "waits for a decision" rule: submitted or completed, no blocker,
+    undecided, not fenced). `Run.FlowStages` (`FlowStage`: the outcome's
+    hop, then the hop each decision chose, so hosts apply each stage's
+    statuses once; the last stage's `Decision` says a person chose the hop
+    `FlowNext` returns).
+  - `Run.FlowNext` walks the decisions made on the run's current evidence
+    and returns the hop the latest one chose, with no stop. `Run.AutoHop`
+    holds for a decided hop into a cloud step without an auto edge (the
+    decision is the start; step mode `ask` and local hops still wait).
+  - `Feedback` (`text`, `source`, `by`) with `FeedbackSource`
+    (`FeedbackRefine` `refine` | `FeedbackStepDecision` `step_decision`;
+    `Valid`): a Refine reason, or the reason of the "changes requested"
+    decision that chose the hop `Next` follows, with who asked. Carried as
+    `SuccessorRun.Feedback` → `Request.Feedback` → `Run.Feedback` (one
+    `*Feedback`, nil without one; every source stored explicitly). The text
+    is a person's: hosts give it to the model as data.
+- `Run.ContradictsApprove(cmd)`: a findings submission recommending
+  `approve` with a finding at or above `BlockingSeverity` (what `Apply`
+  refuses), so runners can check first.
+- `flow.Node.Note` (approval nodes, ≤ `flow.MaxNoteLength` = 500
+  characters, stored trimmed) carried as `activity.FlowHop.Note`. Display
+  only.
+- `activity.FlowRef.MapHops(func(FlowHop) FlowHop) FlowRef`: a copy of the
+  ref with every pinned hop mapped: each outcome's, the loop's exhausted hop
+  and the decision hops nested under either. Hosts resolve pinned hop
+  locations with it instead of walking the hop tree.
+- `activity.BlockerReviewInconclusive` (`review_inconclusive`), a loop stop
+  reason.
+- `activity.LoopPolicy.Blocking()` (the severity from which a finding
+  blocks: `stop_below`, `high` when unset), `LoopPolicy.StallFingerprint`
+  (a round's open blocking findings by `stall_match`, `""` when none) and
+  `Run.BlockingSeverity()`.
+- `flow.VersionV2` (`system:2`), resolvable through `flow.BuiltinGraph`.
+
+### Changed
+
+- Default flow `system:3` (`flow.DefaultVersion`, `flow.Default()`): Review
+  has a `failed` edge to the hand-off node, the loop is named "Build and
+  review", the approval node "Needs a decision", and the loop states
+  `stall_match: location` (`stall_rounds` stays 2, `stop_below` stays
+  `high`). `system:2` keeps its graph and digest. `testdata/compat`:
+  `skills_flows.json`, `doc_page.json` (`work_item_default_digest`),
+  `flow_attribution.json` and `flow_run_ux.json` follow `system:3`; hand-off
+  hops there and in `loop_ledger.json` gain `stop_name`.
+- One "does this finding block" rule (`LoopPolicy.Blocking`): a finding
+  blocks at or above the loop's `stop_below`; an empty `stop_below` (and a
+  run outside a loop) means `high`. It decides a loop review's `approved`
+  outcome, stall fingerprints, the loop ledger's reds and the refused
+  `approve`. Behavior change for loops pinned without `stop_below` (no
+  built-in flow has one): a review whose findings are all below `high` is
+  now `approved` (was `changes_requested`), and medium/low findings no
+  longer count for stalls or ledger reds there.
+- `findings` (`SubmitFindings`) refuses, with `ErrValidation` and a message
+  naming the severity, an `approve` that carries a blocking finding.
+- `Run.Outcome` of a findings run: only recommendation `approve` is
+  `approved`. `inconclusive` is `exhausted` inside a loop, which `FlowNext`
+  sends to the loop's exhausted hop with stop `review_inconclusive` (no
+  edge of the step is needed), and `failed` outside a loop. A reviewer's
+  `request_changes` decision on the current evidence still wins, inside a
+  loop too (the changes-requested hop, no stop). `LoopState.Stop` no longer
+  reports `review_inconclusive` itself and is asked only for a pinned hop.
+- Loop stall detection (`LoopState.Stop`, `flow.Resolved.RefVia`): only
+  blocking findings count, and a finished round is recorded without the
+  findings a person dismissed before the next round started; a stall needs
+  the same fingerprint in the last `stall_rounds` consecutive rounds
+  (`LoopState.Fingerprints` holds one entry per round, `""` when nothing
+  comparable); `stall_rounds` is 0 (off) or 2..6 and governs findings only;
+  a failed-check round failing the same checks as the round right before it
+  always stops (was: repeated `stall_rounds` times); an absent
+  `stall_match` means `location` (was `exact`, `FingerprintBy(…, "")`
+  follows).
+- `apply_fixes` is refused (`ErrConflict`) once the run's flow stands at,
+  or passed, an approval node that decides: "one more round" there is
+  `request_step_changes`, recorded with its reason. It is not offered
+  beside `next` after a decision. A plain hand-off keeps it.
+- `flow.Resolved.Outcomes`: a code agent step has `changes_requested` only
+  while it requires human acceptance (`requires.acceptance`); `Validate`
+  refuses such an edge otherwise and `Ref` pins no hop for it.
+- Approval logic moved to `activity/approval.go`, the guard table to
+  `activity/guard.go`, built-in flows to `flow/builtin.go` (no API change).
+
+### Changed
+
+- `Run.Feedback` (and `Request.Feedback`) is a `*Feedback` object
+  (`{"text", "source", "by"}`) instead of a string. Stored runs with a
+  string `feedback` (always a refine) must be rewritten by the host.
+
+### Removed
+
+- The flow simulator: `flow.Resolved.Simulate`, `Script` (and
+  `Script.Valid`), `ValidScripted`, `SimResult`, `SimStep`, `SimEnd`,
+  `SimApproval`, `SimOpen`, `SimLimit`, `SameAsBefore`, `CheckFailed`,
+  `MaxScriptedVisits`, `MaxSimulatedSteps`. No host simulates flows any
+  more.
+- `flow.WorstCaseCost`: rounds × a per-run budget was never a real bound.
+
+## 0.3.1
+
+- Go 1.27.4 (`go` directive). No API change.
+
+## 0.3.0
 
 ### Added
 

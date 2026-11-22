@@ -46,7 +46,7 @@ func TestSetStepMode(t *testing.T) {
 			}
 			state := r.State
 			if tc.want == ErrConflict {
-				assert.NotContains(t, r.AllowedCommands(owner), SetStepMode, "never offered when refused")
+				assert.NotContains(t, r.AllowedCommands(owner, HostFacts{}), SetStepMode, "never offered when refused")
 			}
 			err := r.Apply(tc.actor, Command{Type: SetStepMode, ExpectedVersion: 1, StepMode: tc.mode})
 			if tc.want != nil {

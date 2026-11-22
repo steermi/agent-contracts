@@ -48,7 +48,7 @@
     "runner": "findings",
     "step_mode": ""
   },
-  "default_version": "system:2",
+  "default_version": "system:3",
   "next_command": {
     "command": "next",
     "command_key": "k2",
@@ -66,7 +66,7 @@
   "paused_run_auto": false,
   "run": {
     "flow": {
-      "version_id": "system:2",
+      "version_id": "system:3",
       "node": "build",
       "hops": {
         "done": {
@@ -84,11 +84,13 @@
         "max_iterations": 3,
         "stop_below": "high",
         "stall_rounds": 2,
+        "stall_match": "location",
         "advance": "auto",
         "iteration": 1,
         "exhausted": {
           "stop": "owner",
-          "approval": true
+          "approval": true,
+          "stop_name": "Needs a decision"
         }
       }
     },
@@ -156,7 +158,8 @@
         "iteration": 1,
         "exhausted": {
           "stop": "owner",
-          "approval": true
+          "approval": true,
+          "stop_name": "Owner decides"
         }
       }
     },
@@ -199,7 +202,8 @@
         "iteration": 1,
         "exhausted": {
           "stop": "owner",
-          "approval": true
+          "approval": true,
+          "stop_name": "Owner decides"
         }
       }
     }
@@ -208,7 +212,7 @@
   "v2_has_auto_outside": false,
   "v2_refs": {
     "build": {
-      "version_id": "system:2",
+      "version_id": "system:3",
       "node": "build",
       "hops": {
         "done": {
@@ -225,16 +229,18 @@
         "max_iterations": 3,
         "stop_below": "high",
         "stall_rounds": 2,
+        "stall_match": "location",
         "advance": "auto",
         "iteration": 1,
         "exhausted": {
           "stop": "owner",
-          "approval": true
+          "approval": true,
+          "stop_name": "Needs a decision"
         }
       }
     },
     "plan": {
-      "version_id": "system:2",
+      "version_id": "system:3",
       "node": "plan",
       "hops": {
         "done": {
@@ -245,7 +251,7 @@
       }
     },
     "review": {
-      "version_id": "system:2",
+      "version_id": "system:3",
       "node": "review",
       "hops": {
         "approved": {
@@ -263,6 +269,11 @@
           "auto": true,
           "back": true,
           "in_loop": true
+        },
+        "failed": {
+          "stop": "owner",
+          "approval": true,
+          "stop_name": "Needs a decision"
         }
       },
       "loop": {
@@ -270,11 +281,13 @@
         "max_iterations": 3,
         "stop_below": "high",
         "stall_rounds": 2,
+        "stall_match": "location",
         "advance": "auto",
         "iteration": 1,
         "exhausted": {
           "stop": "owner",
-          "approval": true
+          "approval": true,
+          "stop_name": "Needs a decision"
         }
       }
     }

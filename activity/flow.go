@@ -1,6 +1,7 @@
 package activity
 
 import (
+	"cmp"
 	"slices"
 	"strings"
 )
@@ -29,9 +30,12 @@ const (
 	OutcomeApproved Outcome = "approved"
 	// OutcomeChangesRequested: a findings run or a person requested changes.
 	OutcomeChangesRequested Outcome = "changes_requested"
-	// OutcomeFailed: the run failed.
+	// OutcomeFailed: the run failed, or a findings run outside a loop was
+	// inconclusive (it assessed nothing a flow can act on).
 	OutcomeFailed Outcome = "failed"
-	// OutcomeExhausted: a quality loop stopped (iterations, budget, stall).
+	// OutcomeExhausted: a quality loop stopped (iterations, budget, stall),
+	// or a findings run inside a loop was inconclusive: the loop leaves
+	// through its exhausted exit (LoopState.Stop names the reason).
 	OutcomeExhausted Outcome = "exhausted"
 	// OutcomeRepeat: the step must run again (code checks not passed). It
 	// is not an edge. Inside a quality loop a code step with required checks
@@ -69,6 +73,17 @@ type FlowHop struct {
 	Stop string `json:"stop,omitempty"`
 	// Approval: the hop ends at a person's decision.
 	Approval bool `json:"approval,omitempty"`
+	// Note is the approval node's note for the person the work is handed
+	// to (flow.Node.Note). Display only.
+	Note string `json:"note,omitempty"`
+	// StopName is the display name of the approval node the hop ends at.
+	StopName string `json:"stop_name,omitempty"`
+	// Approver is who decides at the approval node (empty = owner) and
+	// Decide where each decision leads (approved, changes_requested), pinned
+	// like every other hop. An approval hop without Decide is a plain
+	// hand-off: nobody decides there, the flow stops.
+	Approver Approver            `json:"approver,omitempty"`
+	Decide   map[Outcome]FlowHop `json:"decide,omitempty"`
 	// Back: the hop starts the next iteration of the run's loop.
 	Back bool `json:"back,omitempty"`
 	// InLoop: the hop leads to a step of the same quality loop, so the
@@ -129,21 +144,63 @@ func (a LoopAdvance) Valid() bool { return a == "" || a == LoopAdvanceAuto || a 
 type LoopPolicy struct {
 	// MaxIterations: rounds of the loop body (1..6).
 	MaxIterations int `json:"max_iterations"`
-	// Budget: USD the loop may spend (0 = the run policy's MaxCost).
+	// Budget: USD the loop may spend. 0 = no loop limit; hosts still apply
+	// their own cumulative limit (the run policy's MaxCost).
 	Budget float64 `json:"budget,omitempty"`
-	// StopBelow: findings below this severity do not start another round.
+	// StopBelow: findings below this severity do not block (another round,
+	// stall detection, an approve); empty = High (Blocking).
 	StopBelow Severity `json:"stop_below,omitempty"`
-	// StallRounds: stop when the same findings (or the same failed checks)
-	// repeat this many times.
+	// StallRounds: stop when this many consecutive rounds, the current one
+	// included, end with the same blocking findings. 0 = off; 2..6. 1 is
+	// invalid in a flow and acts as off on a pinned run. It governs findings
+	// only: the same failed checks two rounds in a row, and a code step that
+	// hands back the previous round's revision, always stop the loop
+	// (LoopState.Stop).
 	StallRounds int `json:"stall_rounds,omitempty"`
-	// StallMatch decides when two rounds found "the same problem": exact
-	// (default when empty) compares severity, location and wording;
-	// location ignores wording (FingerprintBy).
+	// StallMatch decides when two rounds found "the same problem":
+	// location (default when empty) compares severity and normalized
+	// location and ignores wording; exact also compares wording
+	// (FingerprintBy).
 	StallMatch StallMatch `json:"stall_match,omitempty"`
 	// Advance decides every hop between the loop's own steps (build →
 	// review, review → build, failed-check rounds): auto starts them without
 	// a person, ask (default when empty) waits.
 	Advance LoopAdvance `json:"advance,omitempty"`
+}
+
+// Blocking is the severity from which a finding blocks the work: the
+// loop's StopBelow, High when it has none. The zero policy (a run outside a
+// loop) blocks from High too.
+func (p LoopPolicy) Blocking() Severity { return cmp.Or(p.StopBelow, High) }
+
+// blocks is the one "does this finding block" rule: its severity is at or
+// above Blocking. It decides a loop review's approved outcome, what stall
+// detection and the loop ledger compare, and which approve is refused.
+// Dismissals do not matter here; callers drop them where they must.
+func (p LoopPolicy) blocks(f Finding) bool { return f.Severity.AtOrAbove(p.Blocking()) }
+
+// StallFingerprint identifies what a finished findings round left open, for
+// stall detection: its blocking findings that no person dismissed, compared
+// by StallMatch. "" when there are none, which never stalls. Lower findings
+// and dismissed ones are noise that must not hide (or fake) a repeating
+// problem.
+func (p LoopPolicy) StallFingerprint(findings []Finding) string {
+	return p.fingerprint(openFindings(findings))
+}
+
+// fingerprint compares the blocking findings by StallMatch, dismissed or
+// not; "" when none blocks.
+func (p LoopPolicy) fingerprint(findings []Finding) string {
+	kept := slices.DeleteFunc(slices.Clone(findings), func(f Finding) bool { return !p.blocks(f) })
+	if len(kept) == 0 {
+		return ""
+	}
+	return FingerprintBy(kept, p.StallMatch)
+}
+
+// openFindings drops the findings a person dismissed.
+func openFindings(findings []Finding) []Finding {
+	return slices.DeleteFunc(slices.Clone(findings), func(f Finding) bool { return !f.open() })
 }
 
 // AutoAdvance reports whether the loop starts its own steps by itself.
@@ -165,7 +222,9 @@ type LoopState struct {
 	Iteration int `json:"iteration"`
 	// StartCost is the chain's cost when the loop was entered.
 	StartCost float64 `json:"start_cost,omitempty"`
-	// Fingerprints of the findings of previous rounds.
+	// Fingerprints has one entry per finished round, in order: what the
+	// round left open (LoopPolicy.StallFingerprint, or CheckFingerprint for
+	// a failed-check round), "" when nothing comparable.
 	Fingerprints []string `json:"fingerprints,omitempty"`
 	// Revision is the digest of the latest code outputs of the loop.
 	Revision string `json:"revision,omitempty"`
@@ -205,10 +264,12 @@ func (r Run) Outcome() Outcome {
 	if r.State != Submitted && r.State != Completed {
 		return ""
 	}
-	digest := r.EvidenceDigest()
-	for i := len(r.Decisions) - 1; i >= 0; i-- {
-		if d := r.Decisions[i]; d.EvidenceDigest == digest && d.Kind == RequestChanges {
-			return OutcomeChangesRequested
+	if len(r.Decisions) > 0 {
+		digest := r.EvidenceDigest()
+		for i := len(r.Decisions) - 1; i >= 0; i-- {
+			if d := r.Decisions[i]; d.EvidenceDigest == digest && d.Kind == RequestChanges {
+				return OutcomeChangesRequested
+			}
 		}
 	}
 	switch r.Runner {
@@ -217,19 +278,49 @@ func (r Run) Outcome() Outcome {
 			return OutcomeRepeat
 		}
 	case Findings:
-		if r.Recommendation != ChangesRequested {
+		switch r.Recommendation {
+		case Approve:
 			return OutcomeApproved
+		case Inconclusive:
+			// Nothing was assessed, so nothing is approved: a loop hands
+			// the work to a person, a step outside a loop failed.
+			if r.Flow != nil && r.Flow.Loop != nil {
+				return OutcomeExhausted
+			}
+			return OutcomeFailed
 		}
 		// Dismissals never change the outcome (in any state): the hop is
 		// decided by the findings as submitted. Dismissals only shape what
 		// successors work from (kept findings) and what people see.
-		if r.Flow != nil && r.Flow.Loop != nil && r.Flow.Loop.StopBelow != "" && !AnyAtOrAbove(r.Findings, r.Flow.Loop.StopBelow) {
-			// Findings below the threshold stay on the run as follow-ups.
+		if r.Flow != nil && r.Flow.Loop != nil && !slices.ContainsFunc(r.Findings, r.Flow.Loop.blocks) {
+			// Findings that do not block stay on the run as follow-ups.
 			return OutcomeApproved
 		}
 		return OutcomeChangesRequested
 	}
 	return OutcomeDone
+}
+
+// loopPolicy is the policy of the run's loop; the zero policy outside one.
+func (r Run) loopPolicy() LoopPolicy {
+	if r.Flow == nil || r.Flow.Loop == nil {
+		return LoopPolicy{}
+	}
+	return r.Flow.Loop.LoopPolicy
+}
+
+// BlockingSeverity is the severity from which a finding contradicts an
+// approval (LoopPolicy.Blocking of the run's loop: its threshold, High
+// without one or outside a loop). Submitting approve with such a finding is
+// refused; hosts may check first to tell the model why.
+func (r Run) BlockingSeverity() Severity { return r.loopPolicy().Blocking() }
+
+// ContradictsApprove reports whether c is a findings submission that
+// recommends approve while carrying a finding at or above the run's
+// blocking severity (BlockingSeverity): Apply refuses it, and runners may
+// ask first to tell the model which rule it broke.
+func (r Run) ContradictsApprove(c Command) bool {
+	return c.Type == SubmitFindings && c.Recommendation == Approve && slices.ContainsFunc(c.Findings, r.loopPolicy().blocks)
 }
 
 var severityRank = map[Severity]int{Low: 1, Medium: 2, High: 3, Critical: 4}
@@ -246,8 +337,8 @@ func AnyAtOrAbove(findings []Finding, min Severity) bool {
 	return slices.ContainsFunc(findings, func(f Finding) bool { return f.Severity.AtOrAbove(min) })
 }
 
-// Fingerprint identifies a set of findings independently of their order,
-// ids and dismissals, so a loop can tell when a round changed nothing.
+// Fingerprint identifies a set of findings by severity, location and
+// wording, independently of their order, ids and dismissals.
 func Fingerprint(findings []Finding) string {
 	keys := make([]string, 0, len(findings))
 	for _, f := range findings {
@@ -275,18 +366,26 @@ func RevisionDigest(outputs []OutputRef) string {
 // Stop reports why the loop may not follow hop from r ("" = it may). This is
 // the single stop table of quality loops: a hop back to the loop's first step
 // (or a failed-check round, which is pinned as Back) stops at the iteration
-// limit, the budget or repeated findings or failed checks; a code run that
-// reproduced the previous round's revision changed nothing, so reviewing it
-// again cannot help.
+// limit, the budget or when the last StallRounds rounds (this one included)
+// ended with the same blocking findings. Two stops need no setting and
+// cannot be turned off, because another round would repeat the last one: a
+// failed-check round that fails the same checks as the round right before
+// it (alwaysStallRounds), and a code run that reproduced the previous
+// round's revision, so reviewing it again cannot help. An inconclusive
+// review in a loop has no hop of its own (Outcome exhausted): FlowNext
+// sends it to the exhausted hop without asking Stop.
 func (l LoopState) Stop(r Run, hop FlowHop) Blocker {
 	switch {
 	case hop.Back && l.Iteration >= l.MaxIterations:
 		return BlockerRepairLimit
 	case hop.Back && l.Budget > 0 && r.Cost-l.StartCost >= l.Budget:
 		return BlockerBudget
-	case hop.Back && r.Runner == Findings && l.StallRounds > 1 && len(r.Findings) > 0 && countOf(l.Fingerprints, FingerprintBy(r.Findings, l.StallMatch))+1 >= l.StallRounds:
+	// The run's own findings count as submitted: a dismissal never changes
+	// the hop of the run it is made on. Earlier rounds were recorded without
+	// the findings people dismissed before the next round started.
+	case hop.Back && r.Runner == Findings && l.repeats(l.fingerprint(r.Findings), l.StallRounds):
 		return BlockerLoopStalled
-	case hop.Back && r.Runner == Code && l.StallRounds > 1 && r.ChecksFailed() && countOf(l.Fingerprints, CheckFingerprint(r.FailedChecks()))+1 >= l.StallRounds:
+	case hop.Back && r.Runner == Code && r.ChecksFailed() && l.repeats(CheckFingerprint(r.FailedChecks()), alwaysStallRounds):
 		return BlockerLoopStalled
 	case r.Runner == Code && hop.Runner == Findings && l.Iteration > 1 && l.Revision != "" && RevisionDigest(r.Outputs) == l.Revision:
 		return BlockerLoopStalled
@@ -294,20 +393,43 @@ func (l LoopState) Stop(r Run, hop FlowHop) Blocker {
 	return ""
 }
 
-func countOf(list []string, v string) int {
-	n := 0
-	for _, s := range list {
-		if s == v {
-			n++
+// alwaysStallRounds is the window of the failed-check stop every loop has:
+// this round and the one right before it.
+const alwaysStallRounds = 2
+
+// repeats reports whether the current round's fingerprint closes a stall
+// over rounds consecutive rounds (this one included): the rounds-1 rounds
+// right before it left the same fingerprint. A round in between with
+// another result (or none) starts the count again.
+func (l LoopState) repeats(fingerprint string, rounds int) bool {
+	before := rounds - 1
+	if fingerprint == "" || before < 1 || len(l.Fingerprints) < before {
+		return false
+	}
+	for _, f := range l.Fingerprints[len(l.Fingerprints)-before:] {
+		if f != fingerprint {
+			return false
 		}
 	}
-	return n
+	return true
 }
 
 // FlowNext resolves the hop the run's outcome leads to and, when a quality
-// loop stops, the exhausted hop with the reason. ok is false while the run
-// has no outcome or its flow has no edge for it.
+// loop stops, the exhausted hop with the reason. A hop that ends at an
+// approval node continues through the decisions people made there
+// (StepDecisions on the run's current evidence): the result is then the hop
+// the latest decision chose, with no stop. ok is false while the run has no
+// outcome or its flow has no edge for it.
 func (r Run) FlowNext() (hop FlowHop, stop Blocker, ok bool) {
+	p := r.flowPath()
+	return p.hop(), p.stop, p.ok()
+}
+
+// flowBase is the hop the run's own outcome leads to, before any step
+// decision: the pinned hop of the outcome, or the loop's exhausted hop with
+// the stop reason. An inconclusive review in a loop (OutcomeExhausted)
+// leaves through the exhausted hop and needs no edge of its own.
+func (r Run) flowBase() (hop FlowHop, stop Blocker, ok bool) {
 	if r.Flow == nil {
 		return FlowHop{}, "", false
 	}
@@ -326,16 +448,54 @@ func (r Run) FlowNext() (hop FlowHop, stop Blocker, ok bool) {
 			return FlowHop{}, "", false
 		}
 	}
+	l := r.Flow.Loop
+	if o == OutcomeExhausted && l != nil {
+		return l.Exhausted, BlockerReviewInconclusive, true
+	}
 	hop, ok = r.Flow.Hops[o]
 	if !ok {
 		return FlowHop{}, "", false
 	}
-	if l := r.Flow.Loop; l != nil {
+	if l != nil {
 		if b := l.Stop(r, hop); b != "" {
 			return l.Exhausted, b, true
 		}
 	}
 	return hop, "", true
+}
+
+// MapHops returns a copy of the ref with f applied to every hop it pins:
+// each outcome's hop, the loop's exhausted hop and, nested under any of
+// them, the hop of each decision at an approval node (f sees a hop before
+// its decision hops). Hosts resolve pinned hops (their Location) with it and
+// never walk the hop tree themselves. f receives hops it may change freely;
+// f's result's Decide map is replaced by the mapped copy.
+func (f FlowRef) MapHops(fn func(FlowHop) FlowHop) FlowRef {
+	var visit func(FlowHop) FlowHop
+	visit = func(h FlowHop) FlowHop {
+		h = fn(h)
+		if len(h.Decide) > 0 {
+			decide := make(map[Outcome]FlowHop, len(h.Decide))
+			for o, next := range h.Decide {
+				decide[o] = visit(next)
+			}
+			h.Decide = decide
+		}
+		return h
+	}
+	if f.Hops != nil {
+		hops := make(map[Outcome]FlowHop, len(f.Hops))
+		for o, h := range f.Hops {
+			hops[o] = visit(h)
+		}
+		f.Hops = hops
+	}
+	if f.Loop != nil {
+		loop := *f.Loop
+		loop.Exhausted = visit(loop.Exhausted)
+		f.Loop = &loop
+	}
+	return f
 }
 
 // HasRepeatHop reports whether the run pins a failed-check round (a code
@@ -357,6 +517,15 @@ func (r Run) reworkHop() (FlowHop, bool) {
 	}
 	hop, ok := r.Flow.Hops[OutcomeChangesRequested]
 	return hop, ok && hop.Runner != ""
+}
+
+// canApplyFixes reports whether "one more round" may follow the
+// changes-requested edge of a submitted review. Once the flow stands at (or
+// passed) an approval node that decides, its decision is the only way on:
+// one more round there is RequestStepChanges, recorded with its reason.
+func (r Run) canApplyFixes() bool {
+	_, rework := r.reworkHop()
+	return rework && r.Runner == Findings && r.State == Submitted && !r.flowPath().reachedApproval()
 }
 
 // NextRunner is the runner a Next command starts, "" when none. The pinned
@@ -398,8 +567,12 @@ func (r Run) SuccessorNode(t CommandType) string {
 // with it and the PurposeFlow guard admits Next only when it holds. Whether
 // the organization allows auto edges outside loops is the host's policy.
 func (r Run) AutoHop() (FlowHop, bool) {
-	hop, stop, ok := r.FlowNext()
-	return hop, ok && stop == "" && hop.Auto && hop.Runner != "" && r.StepMode != StepModeAsk && hop.Location == Cloud
+	p := r.flowPath()
+	hop := p.hop()
+	// A person's decision at an approval node is an explicit start: the
+	// hop it chose needs no auto edge.
+	start := hop.Auto || p.decided() != nil
+	return hop, p.ok() && p.stop == "" && start && hop.Runner != "" && r.StepMode != StepModeAsk && hop.Location == Cloud
 }
 
 // AdvancePausedReason is why the host did not start a hop AutoHop admitted

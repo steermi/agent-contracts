@@ -83,14 +83,12 @@ type Red struct {
 }
 
 // LoopStepOf is the ledger entry of a finished run: its approach, revision,
-// passed required checks and its reds (open findings at or above the loop's
-// threshold, failed required checks). It is the only way a step is built.
+// passed required checks and its reds (open blocking findings,
+// LoopPolicy.Blocking; failed required checks). It is the only way a step is built.
 func LoopStepOf(r Run) LoopStep {
 	s := LoopStep{RunID: r.ID, Name: r.SkillName(), Runner: r.Runner, Tried: clip(r.Tried, MaxLoopTextRunes), CostTotal: r.Cost}
-	var loop *LoopState
 	if r.Flow != nil {
 		s.Node = r.Flow.Node
-		loop = r.Flow.Loop
 	}
 	if r.Runner == Code {
 		s.Revision = RevisionDigest(r.Outputs)
@@ -122,22 +120,16 @@ func LoopStepOf(r Run) LoopStep {
 		s.Fingerprint = CheckFingerprint(failed)
 	}
 	if r.Runner == Findings {
-		var min Severity
-		match := StallExact
-		if loop != nil {
-			min, match = loop.StopBelow, loop.StallMatch
-		}
+		policy := r.loopPolicy()
 		for _, f := range r.Findings {
-			if !f.open() || min != "" && !f.Severity.AtOrAbove(min) {
+			if !f.open() || !policy.blocks(f) {
 				continue
 			}
 			s.Red = append(s.Red, Red{Kind: RedFinding, Ref: f.ID, Severity: string(f.Severity),
 				Expected: clip(f.Expected, MaxLoopTextRunes), Saw: clip(cmp.Or(f.Observed, f.Description), MaxLoopTextRunes),
 				Location: clip(f.Location, maxLocationRunes)})
 		}
-		if len(r.Findings) > 0 {
-			s.Fingerprint = FingerprintBy(r.Findings, match)
-		}
+		s.Fingerprint = policy.StallFingerprint(r.Findings)
 	}
 	if len(s.Red) > MaxLoopReds {
 		s.Red = s.Red[:MaxLoopReds]
@@ -259,13 +251,15 @@ func boundLedger(l []LoopRound) []LoopRound {
 	return l
 }
 
-// FingerprintBy identifies findings for stall detection. exact (and empty)
-// is Fingerprint; location compares severity and normalized location and
-// ignores wording, except for findings without a location, which compare
-// exactly (otherwise every location-less finding of one severity would be
-// the same problem).
+// FingerprintBy identifies findings for stall detection. exact is
+// Fingerprint; location (and empty) compares severity and normalized
+// location and ignores wording, except for findings without a location,
+// which compare exactly (otherwise every location-less finding of one
+// severity would be the same problem). Loops fingerprint through
+// LoopPolicy.StallFingerprint, which first drops the findings that do not
+// block.
 func FingerprintBy(findings []Finding, match StallMatch) string {
-	if match != StallLocation {
+	if match == StallExact {
 		return Fingerprint(findings)
 	}
 	keys := make([]string, 0, len(findings))

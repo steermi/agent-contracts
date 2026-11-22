@@ -30,11 +30,13 @@
       "max_iterations": 3,
       "stop_below": "high",
       "stall_rounds": 2,
+      "stall_match": "location",
       "advance": "auto",
       "iteration": 1,
       "exhausted": {
         "stop": "owner",
-        "approval": true
+        "approval": true,
+        "stop_name": "Needs a decision"
       }
     },
     "rule": "rule-1",

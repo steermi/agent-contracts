@@ -50,8 +50,8 @@ func validateLoop(n Node, keys map[string]Node, member map[string]string, add ad
 	if p.StopBelow != "" && !activity.ValidSeverity(p.StopBelow) {
 		add(n.Key, "loop", "stop below must be low, medium, high or critical")
 	}
-	if p.StallRounds < 0 || p.StallRounds > MaxLoopIterations {
-		add(n.Key, "loop", "stall rounds is 0 to %d", MaxLoopIterations)
+	if p.StallRounds != 0 && (p.StallRounds < 2 || p.StallRounds > MaxLoopIterations) {
+		add(n.Key, "loop", "stall rounds is 0 (off) or 2 to %d", MaxLoopIterations)
 	}
 	switch p.StallMatch {
 	case "", activity.StallExact, activity.StallLocation:
@@ -127,11 +127,19 @@ func (g Resolved) RefVia(versionID, key string, from *activity.Run, via activity
 			state.Ledger = activity.LedgerWith(state.Ledger, state.Iteration, activity.LoopStepOf(*from))
 		}
 		switch {
-		case isEntry(loop, key) && from.Flow.Node != key:
+		// Back to the loop's first step: from another step of the loop, or
+		// (Next only) through the loop node again on a person's decision at
+		// an approval node ("changes requested" after the loop stopped).
+		// Retry and Refine restart the same step and never count.
+		case isEntry(loop, key) && (from.Flow.Node != key || via == activity.Next && hopDecided(from)):
+			// One entry per round, so the stall check reads consecutive
+			// rounds: "" when the round left nothing comparable.
 			state.Iteration++
+			fingerprint := ""
 			if from.Runner == activity.Findings {
-				state.Fingerprints = append(state.Fingerprints, activity.FingerprintBy(from.Findings, state.StallMatch))
+				fingerprint = state.StallFingerprint(from.Findings)
 			}
+			state.Fingerprints = append(state.Fingerprints, fingerprint)
 		case via == activity.Next && from.Flow.Node == key && from.Flow.HasRepeatHop() && from.Outcome() == activity.OutcomeRepeat && from.ChecksFailed():
 			state.Iteration++
 			state.Fingerprints = append(state.Fingerprints, activity.CheckFingerprint(from.FailedChecks()))
@@ -158,12 +166,9 @@ func (g Resolved) RefVia(versionID, key string, from *activity.Run, via activity
 	return ref, true
 }
 
-// WorstCaseCost is the most a loop can spend: its budget, or max iterations
-// times the per-run budget.
-func WorstCaseCost(l activity.LoopPolicy, perRun float64) float64 {
-	worst := float64(max(l.MaxIterations, 1)) * perRun
-	if l.Budget > 0 && l.Budget < worst {
-		return l.Budget
-	}
-	return worst
+// hopDecided reports whether the hop r's FlowNext returns was chosen by a
+// person's decision at an approval node (its last flow stage is decided).
+func hopDecided(r *activity.Run) bool {
+	stages := r.FlowStages()
+	return len(stages) > 0 && stages[len(stages)-1].Decision != nil
 }

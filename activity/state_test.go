@@ -124,24 +124,24 @@ func TestAllowedCommandsFollowTheGuards(t *testing.T) {
 	viewer := Actor{UserID: "viewer", Role: "viewer"}
 	machine := Actor{UserID: "owner", Purpose: PurposeExecutor}
 	suggested := Run{Runner: Code, State: Suggested, OwnerID: "owner", Version: 1}
-	require.Equal(t, []CommandType{Confirm, Cancel}, suggested.AllowedCommands(owner), "off a flow: no step mode")
+	require.Equal(t, []CommandType{Confirm, Cancel}, suggested.AllowedCommands(owner, HostFacts{}), "off a flow: no step mode")
 	suggested.Flow = &FlowRef{VersionID: "v", Node: "build"}
-	require.Equal(t, []CommandType{Confirm, SetStepMode, Cancel}, suggested.AllowedCommands(owner))
-	require.Equal(t, []CommandType{Confirm, SetStepMode, Cancel}, suggested.AllowedCommands(admin))
-	require.Empty(t, suggested.AllowedCommands(reviewer))
-	require.Empty(t, suggested.AllowedCommands(viewer))
-	require.Empty(t, suggested.AllowedCommands(machine))
+	require.Equal(t, []CommandType{Confirm, SetStepMode, Cancel}, suggested.AllowedCommands(owner, HostFacts{}))
+	require.Equal(t, []CommandType{Confirm, SetStepMode, Cancel}, suggested.AllowedCommands(admin, HostFacts{}))
+	require.Empty(t, suggested.AllowedCommands(reviewer, HostFacts{}))
+	require.Empty(t, suggested.AllowedCommands(viewer, HostFacts{}))
+	require.Empty(t, suggested.AllowedCommands(machine, HostFacts{}))
 
 	submitted := Run{Runner: Code, State: Submitted, OwnerID: "owner", Version: 1,
 		Flow: &FlowRef{VersionID: "v", Node: "build", Hops: map[Outcome]FlowHop{OutcomeDone: {Node: "review", Runner: Findings}}}}
-	require.Equal(t, []CommandType{Next, SetStepMode}, submitted.AllowedCommands(owner), "authors never decide on their own work")
-	require.Equal(t, []CommandType{Decide}, submitted.AllowedCommands(reviewer))
+	require.Equal(t, []CommandType{Next, SetStepMode}, submitted.AllowedCommands(owner, HostFacts{}), "authors never decide on their own work")
+	require.Equal(t, []CommandType{Decide}, submitted.AllowedCommands(reviewer, HostFacts{}))
 	submitted.Blocker = BlockerInputsChanged
-	require.Empty(t, submitted.AllowedCommands(reviewer), "stale evidence cannot be decided")
+	require.Empty(t, submitted.AllowedCommands(reviewer, HostFacts{}), "stale evidence cannot be decided")
 
 	failed := Run{Runner: Answer, State: Failed, OwnerID: "owner", Version: 1}
-	require.Equal(t, []CommandType{Retry, TakeLocal, ResumeCloud}, failed.AllowedCommands(owner))
-	for _, cmd := range failed.AllowedCommands(owner) {
+	require.Equal(t, []CommandType{Retry, TakeLocal, ResumeCloud}, failed.AllowedCommands(owner, HostFacts{}))
+	for _, cmd := range failed.AllowedCommands(owner, HostFacts{}) {
 		if !cmd.spawns() {
 			r := failed
 			require.NoError(t, r.Apply(owner, Command{Type: cmd, ExpectedVersion: 1}), cmd)
@@ -212,7 +212,7 @@ func TestActivityOrgLimitBlockersResumeInCloud(t *testing.T) {
 		require.NoError(t, r.Apply(Actor{Purpose: PurposeCoordinator}, Command{Type: Interrupt, Blocker: b, ExpectedVersion: r.Version}))
 		require.Equal(t, Waiting, r.State)
 		require.True(t, b.Resumable())
-		require.Contains(t, r.AllowedCommands(owner), ResumeCloud)
+		require.Contains(t, r.AllowedCommands(owner, HostFacts{}), ResumeCloud)
 		require.NoError(t, r.Apply(owner, Command{Type: ResumeCloud, ExpectedVersion: r.Version}))
 		require.Equal(t, Ready, r.State)
 		require.Empty(t, r.Blocker)

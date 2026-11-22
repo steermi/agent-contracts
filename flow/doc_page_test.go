@@ -15,7 +15,7 @@ func TestDefaultsPerSubject(t *testing.T) {
 	assert.Equal(t, flow.Default(), flow.DefaultFor(""), "an unset subject is a work item")
 	assert.Equal(t, flow.Default(), flow.DefaultFor(flow.SubjectWorkItem))
 	assert.Equal(t, flow.DefaultVersion, flow.DefaultVersionFor(""))
-	assert.Equal(t, "system:2", flow.DefaultVersionFor(flow.SubjectWorkItem))
+	assert.Equal(t, "system:3", flow.DefaultVersionFor(flow.SubjectWorkItem))
 	assert.Equal(t, "system:doc:2", flow.DefaultVersionFor(flow.SubjectDocPage))
 	assert.Empty(t, flow.DefaultVersionFor("repository"))
 	assert.Empty(t, flow.DefaultFor("repository").Nodes, "unknown subjects have no default")
@@ -73,7 +73,7 @@ func TestBuiltinGraphs(t *testing.T) {
 	require.True(t, ok)
 	assert.Equal(t, "steermi:plan", step.Skill, "pinned v1 runs keep their one Plan step")
 	assert.Empty(t, r.PageRules())
-	for _, bad := range []string{"", "system:3", "system:doc:3", "flow-version-uuid"} {
+	for _, bad := range []string{"", "system:4", "system:doc:3", "flow-version-uuid"} {
 		_, ok := flow.BuiltinGraph(bad)
 		assert.False(t, ok, bad)
 	}
@@ -131,6 +131,9 @@ func TestDocPageFlowValidation(t *testing.T) {
 			node(g, "end").PageTriggers = []activity.PageTrigger{{Event: activity.PageEventUpdated, Mode: flow.ModeAsk}}
 		}, "type"},
 		{"unknown subject", func(g *flow.Graph) { g.Subject = "repository" }, "subject"},
+		// A docs page run has no team or project: only its owner decides.
+		{"team managers decide", func(g *flow.Graph) { node(g, "owner").Approver = activity.ApproverTeamManagers }, "approver"},
+		{"reviewers decide", func(g *flow.Graph) { node(g, "owner").Approver = activity.ApproverReviewers }, "approver"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -147,6 +150,13 @@ func TestDocPageFlowValidation(t *testing.T) {
 			assert.Contains(t, fields, tc.field)
 		})
 	}
+}
+
+func TestDocPageApprovalDecidedByOwner(t *testing.T) {
+	g := docGraph()
+	g.Edges = append(g.Edges, flow.Edge{From: "owner", To: "end", On: activity.OutcomeApproved})
+	node(&g, "owner").Approver = activity.ApproverOwner
+	require.NoError(t, resolved(g).Validate(flow.Options{}), "the run's owner decides at a docs page approval")
 }
 
 func TestWorkItemFlowRefusesPageTriggers(t *testing.T) {
@@ -215,13 +225,13 @@ func TestStoredDocFlowsResolveStoredSkills(t *testing.T) {
 
 func TestSimulateDocPageFlow(t *testing.T) {
 	r := resolved(docGraph())
-	happy := r.Simulate(nil, "", 1)
-	assert.Equal(t, flow.SimEnd, happy.EndKind)
+	happy := simulate(r, nil, "", 1)
+	assert.Equal(t, simEnd, happy.EndKind)
 	assert.Equal(t, []string{"draft", "check"}, simNodes(happy))
 	assert.True(t, happy.Steps[0].Auto)
 	assert.Empty(t, happy.Steps[1].Statuses)
 
-	changes := r.Simulate(flow.Script{"check": {"changes_requested"}}, "", 1)
-	assert.Equal(t, flow.SimApproval, changes.EndKind)
+	changes := simulate(r, script{"check": {"changes_requested"}}, "", 1)
+	assert.Equal(t, simApproval, changes.EndKind)
 	assert.Equal(t, "owner", changes.Ends)
 }

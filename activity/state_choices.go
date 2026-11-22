@@ -4,7 +4,11 @@ package activity
 // Confirm and Next) and whether its flow continues by itself (StepMode),
 // plus the cause code an Interrupt records beside its blocker.
 
-import "slices"
+import (
+	"slices"
+	"strings"
+	"unicode/utf8"
+)
 
 // StepMode is a person's per-run choice over a flow's automatic hops:
 // flow follows the pinned hops, ask pauses after every step ("Pause after
@@ -135,17 +139,56 @@ func (r Run) CanChooseLocation(a Actor) bool {
 // follows (Next, ApplyFixes; the flow advancer always takes the pinned
 // hop, which AutoHop requires to be cloud), else the run's own location
 // (Retry, Refine, hops the host did not resolve). Step mode: the person's
-// choice on Next, else the chain's, stored as a run stores it. Hosts
-// request the successor with all of it, and NewRun takes it as given.
+// choice on Next, else the chain's, stored as a run stores it. Feedback is
+// the person's change request the follow-up works from (Request.Feedback;
+// nil without one): a Refine reason, or the reason of the "changes
+// requested" decision at an approval node that chose the hop Next follows,
+// whatever the follow-up's runner. Hosts request the successor with all of
+// it, and NewRun takes it as given.
 type SuccessorRun struct {
 	Runner         Runner
 	Location       Location
 	LocationChosen bool
 	StepMode       StepMode
+	Feedback       *Feedback
 }
 
-func (r Run) successorRun(c Command, runner Runner, hop FlowHop) SuccessorRun {
-	out := SuccessorRun{Runner: runner, Location: r.Location, StepMode: r.StepMode}
+// Feedback is a person's change request a run works from: what they asked
+// (Text, ≤ MaxFeedbackRunes), where it comes from (Source) and who asked
+// (By, a user id).
+type Feedback struct {
+	Text   string         `json:"text"`
+	Source FeedbackSource `json:"source"`
+	By     string         `json:"by,omitempty"`
+}
+
+// FeedbackSource is where a run's Feedback comes from: a Refine command or
+// a "changes requested" decision at an approval node.
+type FeedbackSource string
+
+const (
+	FeedbackRefine       FeedbackSource = "refine"
+	FeedbackStepDecision FeedbackSource = "step_decision"
+)
+
+// Valid reports whether s is a known source.
+func (s FeedbackSource) Valid() bool { return s == FeedbackRefine || s == FeedbackStepDecision }
+
+// cleaned is the feedback a run stores: trimmed text, nil without any; a
+// source that is not known, or text over MaxFeedbackRunes, is refused.
+func (f Feedback) cleaned() (*Feedback, error) {
+	f.Text = strings.TrimSpace(f.Text)
+	if f.Text == "" {
+		return nil, nil
+	}
+	if !f.Source.Valid() || !utf8.ValidString(f.Text) || utf8.RuneCountInString(f.Text) > MaxFeedbackRunes {
+		return nil, ErrValidation
+	}
+	return &f, nil
+}
+
+func (r Run) successorRun(a Actor, c Command, runner Runner, hop FlowHop) SuccessorRun {
+	out := SuccessorRun{Runner: runner, Location: r.Location, StepMode: r.StepMode, Feedback: r.successorFeedback(a, c)}
 	switch {
 	case c.Type == Next && c.Location != "":
 		out.Location, out.LocationChosen = c.Location, true

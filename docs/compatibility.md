@@ -19,6 +19,7 @@ older CLI against a newer service. The rules below keep that safe.
 | Findings dropped by the host (`dropped_findings`) | `testdata/compat/dropped_findings.json` |
 | Dismissing a finding (`dismiss_finding`) | `testdata/compat/dismiss_finding.json` |
 | Flow assignment attribution on flow refs (`rule`, `arm`) | `testdata/compat/flow_attribution.json` |
+| Approval nodes with edges: `approver`, pinned decision hops, `approve_step` / `request_step_changes`, `step_decisions`, the successor's `feedback` object | `testdata/compat/approval.json` |
 | Launch IDs, secret hashing, PKCE S256, branch names | `testdata/compat/locallaunch.json` and RFC 7636 vector in `compat_test.go` |
 | Authorization boundaries (stale input, self-acceptance, verified checks, generations) | `TestCompatBoundaries` in `compat_test.go` |
 

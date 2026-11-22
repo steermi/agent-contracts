@@ -16,7 +16,7 @@ func submittedPlan() Run {
 func TestRefineSpawnsSameStepWithFeedback(t *testing.T) {
 	owner := Actor{UserID: "owner", Role: "member"}
 	r := submittedPlan()
-	require.Contains(t, r.AllowedCommands(owner), Refine)
+	require.Contains(t, r.AllowedCommands(owner, HostFacts{}), Refine)
 	require.Equal(t, "plan", r.SuccessorNode(Refine))
 
 	spawn, err := r.Successor(owner, Command{Type: Refine, ExpectedVersion: 2, Reason: "RIDE is a cycling game, not motorsport."})
@@ -38,35 +38,35 @@ func TestRefineGuard(t *testing.T) {
 	other := Actor{UserID: "other", Role: "member"}
 	admin := Actor{UserID: "admin", Role: "admin"}
 	r := submittedPlan()
-	require.ErrorIs(t, r.stateGuard(other, Refine), ErrForbidden)
-	require.NoError(t, r.stateGuard(admin, Refine))
-	require.ErrorIs(t, r.stateGuard(Actor{UserID: "owner", Role: "member", Purpose: PurposeFlow}, Refine), ErrForbidden)
+	require.ErrorIs(t, r.stateGuard(other, Refine, HostFacts{}), ErrForbidden)
+	require.NoError(t, r.stateGuard(admin, Refine, HostFacts{}))
+	require.ErrorIs(t, r.stateGuard(Actor{UserID: "owner", Role: "member", Purpose: PurposeFlow}, Refine, HostFacts{}), ErrForbidden)
 
 	running := submittedPlan()
 	running.State = Running
-	require.ErrorIs(t, running.stateGuard(owner, Refine), ErrConflict)
+	require.ErrorIs(t, running.stateGuard(owner, Refine, HostFacts{}), ErrConflict)
 
 	review := submittedPlan()
 	review.Runner = Findings
-	require.ErrorIs(t, review.stateGuard(owner, Refine), ErrConflict)
+	require.ErrorIs(t, review.stateGuard(owner, Refine, HostFacts{}), ErrConflict)
 
 	noOutput := submittedPlan()
 	noOutput.Outputs = nil
-	require.ErrorIs(t, noOutput.stateGuard(owner, Refine), ErrConflict)
+	require.ErrorIs(t, noOutput.stateGuard(owner, Refine, HostFacts{}), ErrConflict)
 
 	stale := submittedPlan()
 	stale.Blocker = BlockerInputsChanged
-	require.ErrorIs(t, stale.stateGuard(owner, Refine), ErrStale)
+	require.ErrorIs(t, stale.stateGuard(owner, Refine, HostFacts{}), ErrStale)
 }
 
 func TestNewRunKeepsFeedback(t *testing.T) {
 	parent := submittedPlan()
 	parent.ID, parent.RootID = "p", "p"
 	r, err := NewRun("r2", "org", "project", "item", Actor{UserID: "owner"}, Request{
-		Runner: Answer, Location: Cloud, InputDigest: "d", Feedback: "  make it about bikes  ",
+		Runner: Answer, Location: Cloud, InputDigest: "d", Feedback: &Feedback{Text: "  make it about bikes  ", Source: FeedbackRefine},
 	}, &parent)
 	require.NoError(t, err)
-	require.Equal(t, "make it about bikes", r.Feedback)
+	require.Equal(t, "make it about bikes", r.Feedback.Text)
 	require.Equal(t, "p", r.PredecessorID)
 }
 

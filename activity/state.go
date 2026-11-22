@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"slices"
 	"strings"
 	"time"
@@ -52,10 +53,11 @@ const (
 	// spend or message limit is reached. Resumable once the limit is raised.
 	BlockerOrgBudget    Blocker = "org_budget"
 	BlockerMessageLimit Blocker = "message_limit"
-	// Loop stop reasons (FlowNext): the loop's budget is spent, or its
-	// findings or revision stopped changing.
-	BlockerBudget      Blocker = "budget"
-	BlockerLoopStalled Blocker = "loop_stalled"
+	// Loop stop reasons (FlowNext): the loop's budget is spent, its
+	// findings or revision stopped changing, or its review was inconclusive.
+	BlockerBudget             Blocker = "budget"
+	BlockerLoopStalled        Blocker = "loop_stalled"
+	BlockerReviewInconclusive Blocker = "review_inconclusive"
 )
 
 // final blockers can never be resumed; the run must be requested again.
@@ -156,6 +158,13 @@ const (
 	// manager; any non-terminal run, so also a submitted run whose next hop
 	// has not started yet).
 	SetStepMode CommandType = "set_step_mode"
+	// ApproveStep and RequestStepChanges are a person's decision at the
+	// approval node the run's flow stopped at (Run.Approval): recorded as a
+	// StepDecision, it selects the node's hop for that outcome. The reason
+	// is required for RequestStepChanges (≤ MaxFeedbackRunes) and becomes
+	// the Feedback of the step the hop starts.
+	ApproveStep        CommandType = "approve_step"
+	RequestStepChanges CommandType = "request_step_changes"
 	// MaxDismissalReasonRunes bounds a DismissFinding reason.
 	MaxDismissalReasonRunes = 600
 	// Internal commands; never accepted from an API caller.
@@ -171,7 +180,7 @@ const (
 // Public reports whether API callers may send the command.
 func (t CommandType) Public() bool {
 	switch t {
-	case CloseMeeting, StopMeetingTurn, Continue, Confirm, Retry, Clarify, TakeLocal, ResumeCloud, Cancel, Submit, SubmitFindings, Decide, Revise, Next, ApplyFixes, Refine, DismissFinding, SetStepMode:
+	case CloseMeeting, StopMeetingTurn, Continue, Confirm, Retry, Clarify, TakeLocal, ResumeCloud, Cancel, Submit, SubmitFindings, Decide, Revise, Next, ApplyFixes, Refine, DismissFinding, SetStepMode, ApproveStep, RequestStepChanges:
 		return true
 	}
 	return false
@@ -330,15 +339,20 @@ type Run struct {
 	// SubmitFindings; ≤ MaxLoopTextRunes). A label for people and later loop
 	// rounds, never an input to a stop.
 	Tried string `json:"tried,omitempty"`
-	// Feedback is the person's change request a Refine successor works from.
-	Feedback string `json:"feedback,omitempty"`
+	// Feedback is the person's change request the run works from (nil
+	// without one). The text is a person's, not the owner's: hosts give it
+	// to the model as data, never as instructions.
+	Feedback *Feedback `json:"feedback,omitempty"`
 	// SkillInputs is the validated start-form value of the run's skill
 	// (skill/inputs), pinned at request time and given to the model as data.
 	SkillInputs json.RawMessage `json:"skill_inputs,omitempty"`
 	ResumeNote  string          `json:"resume_note,omitempty"`
 	Decisions   []Decision      `json:"decisions,omitempty"`
-	Policy      Policy          `json:"policy"`
-	Blocker     Blocker         `json:"blocker,omitempty"`
+	// StepDecisions are the decisions people made at the approval nodes the
+	// run's flow stopped at, in order (ApproveStep, RequestStepChanges).
+	StepDecisions []StepDecision `json:"step_decisions,omitempty"`
+	Policy        Policy         `json:"policy"`
+	Blocker       Blocker        `json:"blocker,omitempty"`
 	// StepMode is the person's choice over automatic hops, stored empty for
 	// flow and "ask" for ask; set at request, Confirm, Next or SetStepMode
 	// and carried to successors (SuccessorRun).
@@ -368,8 +382,9 @@ type Request struct {
 	Origin                   string      `json:"origin"`
 	CausationID              string      `json:"causation_id,omitempty"`
 	PredecessorID            string      `json:"predecessor_id,omitempty"`
-	// Feedback carries a Refine command's reason into the successor.
-	Feedback string `json:"feedback,omitempty"`
+	// Feedback carries a person's change request into the successor
+	// (SuccessorRun.Feedback).
+	Feedback *Feedback `json:"feedback,omitempty"`
 	// SkillInputs is the validated value of the skill's inputs schema. Hosts
 	// validate it (skill.Skill.Inputs) and fold it into InputDigest.
 	SkillInputs json.RawMessage `json:"skill_inputs,omitempty"`
@@ -405,7 +420,10 @@ type Command struct {
 	// Next (the successor runs there, Run.Successor). Owner only.
 	Location Location `json:"location,omitempty"`
 	// Internal payloads, never decoded from API bodies.
-	Blocker Blocker `json:"-"`
+	// Facts are the host's facts about the run for this command
+	// (HostFacts); only step decisions read them.
+	Facts   HostFacts `json:"-"`
+	Blocker Blocker   `json:"-"`
 	// BlockerDetail travels with Blocker on Interrupt (Run.BlockerDetail).
 	BlockerDetail BlockerDetail `json:"-"`
 	Cost          float64       `json:"-"`
@@ -451,7 +469,13 @@ func NewRun(id, org, project, item string, a Actor, q Request, parent *Run) (Run
 	}
 	r.Subject = subject
 	r.StepMode = q.StepMode.stored()
-	r.Feedback = strings.TrimSpace(q.Feedback)
+	if q.Feedback != nil {
+		f, err := q.Feedback.cleaned()
+		if err != nil {
+			return Run{}, err
+		}
+		r.Feedback = f
+	}
 	if len(q.SkillInputs) > 0 {
 		r.SkillInputs = append(json.RawMessage(nil), q.SkillInputs...)
 	}
@@ -588,187 +612,6 @@ func (r Run) HumanAccepted() bool {
 	return accepted >= max(r.Policy.Quorum, 1)
 }
 
-// guard is the single eligibility rule: who may issue a command, with its
-// choices (location, step mode), in which state. Apply, Successor,
-// AllowedCommands and CanChooseLocation all ask it; apply adds only payload
-// validation.
-func (r Run) guard(a Actor, c Command) error {
-	if err := r.stateGuard(a, c.Type); err != nil {
-		return err
-	}
-	return r.choiceGuard(a, c)
-}
-
-// stateGuard is guard's table of who may issue a command type in which
-// state.
-func (r Run) stateGuard(a Actor, t CommandType) error {
-	owner := r.ownedBy(a)
-	if sessionCommands[t] {
-		return r.sessionGuard(a, t, owner)
-	}
-	if r.IsSessionWorkflow() && !r.sessionAllows(t) {
-		return ErrForbidden
-	}
-	// Docs page runs are cloud only: nothing moves them to, or waits for, a
-	// local agent. ResumeCloud stays: it resumes a blocked run in the cloud.
-	if r.IsDocPage() && (t == TakeLocal || t == Handoff) {
-		return ErrForbidden
-	}
-	manager := owner || a.manager()
-	switch t {
-	case Confirm:
-		if !manager {
-			return ErrForbidden
-		}
-		if r.Blocker.final() {
-			return ErrStale
-		}
-		if r.State != Suggested && (r.State != Waiting || r.Blocker.Resumable()) {
-			return ErrConflict
-		}
-	case Start, Clarify, Handoff:
-		if !owner {
-			return ErrForbidden
-		}
-		if t == Start && r.State != Ready || t != Start && r.State != Running {
-			return ErrConflict
-		}
-	case TakeLocal, ResumeCloud:
-		if !r.ownerAsPerson(a) {
-			return ErrForbidden
-		}
-		// A suggestion moves with Confirm's location; moving applies once a
-		// run is underway or interrupted.
-		if r.State == Suggested || r.State == Submitted || r.State == Completed || r.State == Cancelled {
-			return ErrConflict
-		}
-		if r.Blocker.final() {
-			return ErrStale
-		}
-	case Fail:
-		if !owner {
-			return ErrForbidden
-		}
-		if !r.ActiveExecution() {
-			return ErrConflict
-		}
-	case Cancel:
-		if !manager {
-			return ErrForbidden
-		}
-		// A current submission awaits a decision; only a stale one is withdrawn.
-		if r.Terminal() || r.State == Submitted && r.Blocker == "" {
-			return ErrConflict
-		}
-	case Submit, SubmitFindings:
-		if !owner {
-			return ErrForbidden
-		}
-		if r.State != Running || (r.Runner == Findings) != (t == SubmitFindings) {
-			return ErrConflict
-		}
-	case Decide:
-		if !a.human() || a.UserID == r.OwnerID || a.UserID == r.CandidateAuthorID || !r.Policy.allowsReviewer(a.UserID) {
-			return ErrForbidden
-		}
-		if r.Blocker != "" {
-			return ErrStale
-		}
-		if r.State != Submitted && r.State != Completed {
-			return ErrConflict
-		}
-	case Revise:
-		if !a.human() {
-			return ErrForbidden
-		}
-	case Retry:
-		if !r.ownerAsPerson(a) {
-			return ErrForbidden
-		}
-		if r.State != Failed {
-			return ErrConflict
-		}
-	case Refine:
-		// A person (owner or manager) refines submitted answer or code work.
-		if !manager || a.Purpose != "" {
-			return ErrForbidden
-		}
-		if r.Blocker != "" {
-			return ErrStale
-		}
-		if (r.Runner != Answer && r.Runner != Code) || (r.State != Submitted && r.State != Completed) || len(r.Outputs) == 0 {
-			return ErrConflict
-		}
-	case Next, ApplyFixes:
-		if a.Purpose == PurposeFlow {
-			return r.flowGuard(a, t)
-		}
-		if !manager || a.Purpose != "" {
-			return ErrForbidden
-		}
-		if r.Blocker != "" {
-			return ErrStale
-		}
-		if _, rework := r.reworkHop(); t == Next && r.NextRunner() == "" || t == ApplyFixes && (r.Runner != Findings || r.State != Submitted || !rework) {
-			return ErrConflict
-		}
-	case SetStepMode:
-		if !manager || !a.human() {
-			return ErrForbidden
-		}
-		if !r.stepModeOpen() {
-			return ErrConflict
-		}
-	case DismissFinding:
-		// The run's owner or a manager sets findings aside, as people.
-		if !manager || !a.human() {
-			return ErrForbidden
-		}
-		if r.Blocker != "" {
-			return ErrStale
-		}
-		if r.Runner != Findings || (r.State != Submitted && r.State != Completed) || !slices.ContainsFunc(r.Findings, Finding.open) {
-			return ErrConflict
-		}
-	case Interrupt:
-		if a.Purpose != PurposeCoordinator {
-			return ErrForbidden
-		}
-		if r.Terminal() {
-			return ErrConflict
-		}
-	case RecordCheck:
-		if a.Purpose != PurposeVerifiedGit {
-			return ErrForbidden
-		}
-	case RecordCost:
-		if a.Purpose != PurposeExecutor && a.Purpose != PurposeCoordinator {
-			return ErrForbidden
-		}
-	default:
-		return ErrValidation
-	}
-	return nil
-}
-
-// userCommands are the commands a person can act on from the run's controls.
-var userCommands = []CommandType{CloseMeeting, StopMeetingTurn, Continue, Confirm, Retry, TakeLocal, ResumeCloud, Next, ApplyFixes, Refine, Submit, SubmitFindings, Decide, DismissFinding, SetStepMode, Cancel}
-
-// AllowedCommands lists the controls this person may use now. Machine callers
-// act through their own protocols and get none.
-func (r Run) AllowedCommands(a Actor) []CommandType {
-	out := []CommandType{}
-	if !a.human() {
-		return out
-	}
-	for _, t := range userCommands {
-		if r.guard(a, Command{Type: t}) == nil {
-			out = append(out, t)
-		}
-	}
-	return out
-}
-
 // Successor validates a command that starts a follow-up run and returns the
 // follow-up: runner, location and step mode, decided in one pass. The
 // coordinator resolves its inputs and creates it.
@@ -784,18 +627,18 @@ func (r Run) Successor(a Actor, c Command) (SuccessorRun, error) {
 	}
 	switch c.Type {
 	case Retry:
-		return r.successorRun(c, r.Runner, FlowHop{}), nil
+		return r.successorRun(a, c, r.Runner, FlowHop{}), nil
 	case Refine:
 		if f := strings.TrimSpace(c.Reason); f == "" || utf8.RuneCountInString(f) > MaxFeedbackRunes {
 			return SuccessorRun{}, ErrValidation
 		}
-		return r.successorRun(c, r.Runner, FlowHop{}), nil
+		return r.successorRun(a, c, r.Runner, FlowHop{}), nil
 	case ApplyFixes:
 		hop, _ := r.reworkHop()
-		return r.successorRun(c, hop.Runner, hop), nil
+		return r.successorRun(a, c, hop.Runner, hop), nil
 	}
 	hop, _, _ := r.FlowNext()
-	return r.successorRun(c, hop.Runner, hop), nil
+	return r.successorRun(a, c, hop.Runner, hop), nil
 }
 
 // Apply validates before changing the snapshot. Persistence and idempotency are
@@ -910,6 +753,9 @@ func (r *Run) apply(a Actor, c Command) error {
 			}
 			seen[f.ID] = true
 		}
+		if r.ContradictsApprove(c) {
+			return fmt.Errorf("%w: approve contradicts a finding rated %s or above; recommend changes_requested, or lower the severity of findings that do not block", ErrValidation, r.BlockingSeverity())
+		}
 		// Only a person dismisses (DismissFinding): a submitted dismissal
 		// reason is cleared, not refused, so older runners keep working.
 		r.Findings = slices.Clone(c.Findings)
@@ -948,6 +794,8 @@ func (r *Run) apply(a Actor, c Command) error {
 		r.Decisions = append(r.Decisions, Decision{a.UserID, c.Decision, c.Reason, c.EvidenceDigest, time.Now().UTC()})
 	case DismissFinding:
 		return r.dismissFinding(c)
+	case ApproveStep, RequestStepChanges:
+		return r.decideStep(a, c)
 	case Revise:
 		if c.InputDigest == "" {
 			return ErrValidation

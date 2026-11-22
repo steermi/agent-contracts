@@ -74,7 +74,7 @@ go test ./activity -run Example -v
 | [`skill/builtin`](skill/builtin) | The built-in skills, embedded. Their text is the prompt of a run. |
 | [`skill/inputs`](skill/inputs) | The start form a skill can ship (`inputs.schema.json`, a closed JSON Schema subset). |
 | [`skill/board`](skill/board) | The board definition for skills that hand back a board (`board.yaml`). |
-| [`flow`](flow) | Delivery flows: graphs of agent steps, quality loops and approvals, with validation and a simulator. |
+| [`flow`](flow) | Delivery flows: graphs of agent steps, quality loops and approvals, with validation. |
 | [`hint`](hint) | Suggests a model tier and effort for a run. It never names a model. |
 | [`locallaunch`](locallaunch) | Launch IDs, device secrets, PKCE (S256) and launch branch names. |
 

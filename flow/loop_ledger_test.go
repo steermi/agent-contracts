@@ -116,6 +116,18 @@ func TestFailedCheckRound(t *testing.T) {
 	_, ok = again.AutoHop()
 	assert.False(t, ok)
 
+	// The stop needs no setting: stall_rounds governs findings only.
+	for _, rounds := range []int{0, 3} {
+		loop := *next.Loop
+		loop.StallRounds = rounds
+		unset := next
+		unset.Loop = &loop
+		_, stop, _ = codeRun("b2", &unset, 2, activity.CheckFailed, "unit").FlowNext()
+		assert.Equal(t, activity.BlockerLoopStalled, stop, "stall_rounds %d", rounds)
+		_, stop, _ = codeRun("b2", &unset, 2, activity.CheckFailed, "lint").FlowNext()
+		assert.Empty(t, stop, "stall_rounds %d: another failure is another round", rounds)
+	}
+
 	// A GitLab pipeline failing in another job is another problem.
 	other := codeRun("b2", &next, 2, activity.CheckFailed, "lint")
 	_, stop, _ = other.FlowNext()
@@ -226,7 +238,8 @@ func TestStallMatchLocation(t *testing.T) {
 	}
 	assert.NotEqual(t, activity.FingerprintBy(noLoc("a"), activity.StallLocation), activity.FingerprintBy(noLoc("b"), activity.StallLocation),
 		"location-less findings compare exactly")
-	assert.Equal(t, activity.Fingerprint(noLoc("a")), activity.FingerprintBy(noLoc("a"), ""), "absent = exact = today's digest")
+	assert.Equal(t, activity.FingerprintBy(noLoc("a"), activity.StallLocation), activity.FingerprintBy(noLoc("a"), ""), "absent = location")
+	assert.Equal(t, activity.Fingerprint(noLoc("a")), activity.FingerprintBy(noLoc("a"), activity.StallExact))
 }
 
 func TestLoopSettingsValidation(t *testing.T) {
@@ -260,11 +273,11 @@ func TestLoopSettingsValidation(t *testing.T) {
 }
 
 func TestSimulateFailedCheckRounds(t *testing.T) {
-	sim := checkedDefault(activity.LoopAdvanceAuto).Simulate(flow.Script{"build": {flow.CheckFailed}}, "", 1)
+	sim := simulate(checkedDefault(activity.LoopAdvanceAuto), script{"build": {checkFailed}}, "", 1)
 	require.GreaterOrEqual(t, len(sim.Steps), 3)
 	assert.Equal(t, activity.OutcomeRepeat, sim.Steps[1].Outcome)
 	assert.True(t, sim.Steps[1].Auto)
 	last := sim.Steps[len(sim.Steps)-1]
 	assert.Equal(t, activity.BlockerLoopStalled, last.Stop)
-	assert.Equal(t, flow.SimApproval, sim.EndKind)
+	assert.Equal(t, simApproval, sim.EndKind)
 }

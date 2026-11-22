@@ -35,7 +35,9 @@ const (
 	DefaultIterations  = 3
 	DefaultStallRounds = 2
 	maxNameLength      = 80
-	maxCheckLength     = 100
+	// MaxNoteLength bounds an approval node's note (characters).
+	MaxNoteLength  = 500
+	maxCheckLength = 100
 )
 
 // Trigger modes, as for board rules.
@@ -53,7 +55,9 @@ const (
 	NodeAgent NodeType = "agent"
 	// NodeLoop is a container: its body repeats until approved or stopped.
 	NodeLoop NodeType = "loop"
-	// NodeApproval hands the work to a person; the flow stops there.
+	// NodeApproval hands the work to a person. Without outgoing edges the
+	// flow stops there; with an approved and/or changes_requested edge the
+	// node's approver decides which one the flow follows.
 	NodeApproval NodeType = "approval"
 	// NodeStatus sets the work item status when reached.
 	NodeStatus NodeType = "status"
@@ -104,6 +108,13 @@ type Node struct {
 	Key  string   `json:"key"`
 	Type NodeType `json:"type"`
 	Name string   `json:"name,omitempty"`
+	// Note (approval nodes): what the person the work is handed to should
+	// know or check, at most MaxNoteLength characters, stored trimmed.
+	// Shown with the hand-off (activity.FlowHop.Note); it decides nothing.
+	Note string `json:"note,omitempty"`
+	// Approver (approval nodes): who decides when the node has edges.
+	// owner (default when empty), team_managers or reviewers.
+	Approver activity.Approver `json:"approver,omitempty"`
 	// Agent: the skill the step runs ("steermi:<slug>" built-in or a skill
 	// id). The runner is derived from the skill's result (Resolved.Kind),
 	// never stored (graph v3).
@@ -141,7 +152,7 @@ type Edge struct {
 func (e Edge) Auto() bool { return e.Start == ModeAuto }
 
 // Graph is a flow version as stored and edited: agent steps name only
-// their skill. Resolve it to place runs, validate or simulate.
+// their skill. Resolve it to place runs or validate it.
 //
 // Subject is what the flow's runs work on: work_item (the default when
 // empty, so stored work item flows keep their digest) or doc_page.
@@ -154,7 +165,7 @@ type Graph struct {
 
 // Resolved is a graph whose agent steps carry the runner derived from their
 // skill's result. Only Graph.Resolve makes one, so every method that needs
-// a step's runner (Validate, Hop, Ref, Rules, FirstOf, Simulate) lives here
+// a step's runner (Validate, Hop, Ref, Rules, FirstOf) lives here
 // and cannot run on an unresolved graph. It encodes as its Graph.
 type Resolved struct {
 	Graph
@@ -185,18 +196,24 @@ func (g *Graph) UnmarshalJSON(data []byte) error {
 }
 
 // normalized is the one place a graph's defaults get one spelling: an
-// explicit inherit location or an explicit ask advance becomes empty. Every
+// explicit inherit location, ask advance or owner approver becomes empty,
+// and notes are trimmed. Every
 // graph passes it, decoded (UnmarshalJSON) or built in Go (Resolve,
 // Digest), so a flow written either way has one digest and its hops pin
 // one rule ("" = inherit, never "inherit").
 func (g Graph) normalized() Graph {
 	if !slices.ContainsFunc(g.Nodes, func(n Node) bool {
-		return n.Location == activity.RuleInherit || n.Loop != nil && n.Loop.Advance == activity.LoopAdvanceAsk
+		return n.Location == activity.RuleInherit || n.Loop != nil && n.Loop.Advance == activity.LoopAdvanceAsk ||
+			n.Note != strings.TrimSpace(n.Note) || n.Approver == activity.ApproverOwner
 	}) {
 		return g
 	}
 	g.Nodes = slices.Clone(g.Nodes)
 	for i, n := range g.Nodes {
+		g.Nodes[i].Note = strings.TrimSpace(n.Note)
+		if n.Approver == activity.ApproverOwner {
+			g.Nodes[i].Approver = ""
+		}
 		if n.Location == activity.RuleInherit {
 			g.Nodes[i].Location = ""
 		}
@@ -233,175 +250,8 @@ func (e Issues) Error() string {
 
 func (e Issues) Unwrap() error { return ErrInvalid }
 
-// DefaultVersion identifies the built-in default flow (Default) on runs that
-// pin it.
-const DefaultVersion = "system:2"
-
-// VersionV1 identifies the first built-in work item flow (every edge asks).
-// It is no longer the default but stays resolvable for runs that pin it.
-const VersionV1 = "system:1"
-
-// DefaultDocVersion identifies the built-in default docs page flow
-// (defaultDocPageV2).
-const DefaultDocVersion = "system:doc:2"
-
-// DocVersionV1 identifies the first built-in docs page flow (one Plan step).
-// It is no longer a default but stays resolvable for runs that pin it.
-const DocVersionV1 = "system:doc:1"
-
-// BuiltinGraph returns the built-in flow a run pins by version: the work
-// item default and every docs page default, current and earlier. Built-in
-// graphs never change under a version id.
-func BuiltinGraph(version string) (Graph, bool) {
-	switch version {
-	case DefaultVersion:
-		return Default(), true
-	case VersionV1:
-		return defaultV1(), true
-	case DocVersionV1:
-		return defaultDocPage(), true
-	case DefaultDocVersion:
-		return defaultDocPageV2(), true
-	}
-	return Graph{}, false
-}
-
-// IsBuiltinVersion reports whether version names a built-in flow.
-func IsBuiltinVersion(version string) bool {
-	_, ok := BuiltinGraph(version)
-	return ok
-}
-
 // SubjectKind is the flow's subject, work_item when unset.
 func (g Graph) SubjectKind() string { return cmp.Or(g.Subject, SubjectWorkItem) }
-
-// DefaultFor is the built-in default flow of a subject ("" = work_item);
-// unknown subjects get an empty graph, which never validates.
-func DefaultFor(subject string) Graph {
-	switch subject {
-	case "", SubjectWorkItem:
-		return Default()
-	case SubjectDocPage:
-		return defaultDocPageV2()
-	}
-	return Graph{}
-}
-
-// DefaultVersionFor identifies DefaultFor(subject) on runs that pin it ("" for
-// unknown subjects).
-func DefaultVersionFor(subject string) string {
-	switch subject {
-	case "", SubjectWorkItem:
-		return DefaultVersion
-	case SubjectDocPage:
-		return DefaultDocVersion
-	}
-	return ""
-}
-
-// defaultDocPage (system:doc:1) is one Plan step on the page, then End: no
-// triggers, no status changes. Kept unchanged for runs that pin it.
-func defaultDocPage() Graph {
-	return Graph{
-		Subject: SubjectDocPage,
-		Start:   "plan",
-		Nodes: []Node{
-			{Key: "plan", Type: NodeAgent, Name: "Plan", Skill: builtin.ID(activity.Answer)},
-			{Key: "end", Type: NodeEnd, Name: "End"},
-		},
-		Edges: []Edge{{From: "plan", To: "end", On: activity.OutcomeDone}},
-	}
-}
-
-// defaultDocPageV2 (system:doc:2) reconciles the page with its related
-// pages and, when findings ask for changes, offers to apply them: Docs
-// reconcile (asked when the page is published) → changes requested (ask) →
-// Docs fix → End; no findings → End. No status changes.
-func defaultDocPageV2() Graph {
-	return Graph{
-		Subject: SubjectDocPage,
-		Start:   "reconcile",
-		Nodes: []Node{
-			{Key: "reconcile", Type: NodeAgent, Name: "Reconcile", Skill: builtin.IDOf("docs-reconcile"),
-				PageTriggers: []activity.PageTrigger{{Event: activity.PageEventPublished, Mode: ModeAsk}}},
-			{Key: "fix", Type: NodeAgent, Name: "Fix", Skill: builtin.IDOf("docs-fix")},
-			{Key: "end", Type: NodeEnd, Name: "End"},
-		},
-		Edges: []Edge{
-			{From: "reconcile", To: "fix", On: activity.OutcomeChangesRequested, Start: ModeAsk},
-			{From: "reconcile", To: "end", On: activity.OutcomeApproved},
-			{From: "fix", To: "end", On: activity.OutcomeDone},
-		},
-	}
-}
-
-// Default (system:2) is the built-in flow every organization inherits until
-// a scope saves its own: Plan → [quality loop: Build ⇄ Review, max 3
-// rounds, stop below high, advancing by itself] → ⚑ In review → End, the
-// loop handing to the owner when it stops. Plan → loop asks; Review always
-// runs in the cloud, Build where the chain runs it. Board triggers are the
-// former default rules.
-func Default() Graph {
-	return Graph{
-		Start: "plan",
-		Nodes: []Node{
-			{Key: "plan", Type: NodeAgent, Name: "Plan", Skill: builtin.ID(activity.Answer)},
-			{Key: "quality", Type: NodeLoop, Name: "Quality loop", Body: []string{"build", "review"},
-				Loop: &activity.LoopPolicy{MaxIterations: DefaultIterations, StopBelow: activity.High, StallRounds: DefaultStallRounds, Advance: activity.LoopAdvanceAuto}},
-			{Key: "build", Type: NodeAgent, Name: "Build", Skill: builtin.ID(activity.Code),
-				Triggers: []Trigger{{FromStatus: "todo", ToStatus: "in_progress", ItemType: "*", Mode: ModeAsk}}},
-			{Key: "review", Type: NodeAgent, Name: "Review", Skill: builtin.ID(activity.Findings), Location: activity.RuleCloud,
-				Triggers: []Trigger{{FromStatus: "in_progress", ToStatus: "in_review", ItemType: "*", Mode: ModeAsk}}},
-			{Key: "in_review", Type: NodeStatus, Name: "In review", Status: &activity.StatusTarget{Category: "in_review"}},
-			{Key: "owner", Type: NodeApproval, Name: "Owner decides"},
-			{Key: "end", Type: NodeEnd, Name: "End"},
-		},
-		Edges: []Edge{
-			{From: "plan", To: "quality", On: activity.OutcomeDone, Start: ModeAsk},
-			// Inside the loop: no start, the loop's advance decides.
-			{From: "build", To: "review", On: activity.OutcomeDone},
-			{From: "review", To: "build", On: activity.OutcomeChangesRequested},
-			{From: "review", To: "in_review", On: activity.OutcomeApproved},
-			{From: "quality", To: "owner", On: activity.OutcomeExhausted},
-			{From: "in_review", To: "end", On: activity.OutcomeDone},
-		},
-	}
-}
-
-// defaultV1 (system:1) is the first default: the graph of Default with
-// every edge asking (inner loop edges carry start: ask, which Hop ignores; the
-// loop has no advance, so they ask). Kept unchanged for runs that pin it.
-func defaultV1() Graph {
-	return Graph{
-		Start: "plan",
-		Nodes: []Node{
-			{Key: "plan", Type: NodeAgent, Name: "Plan", Skill: builtin.ID(activity.Answer)},
-			{Key: "quality", Type: NodeLoop, Name: "Quality loop", Body: []string{"build", "review"},
-				Loop: &activity.LoopPolicy{MaxIterations: DefaultIterations, StopBelow: activity.High, StallRounds: DefaultStallRounds}},
-			{Key: "build", Type: NodeAgent, Name: "Build", Skill: builtin.ID(activity.Code),
-				Triggers: []Trigger{{FromStatus: "todo", ToStatus: "in_progress", ItemType: "*", Mode: ModeAsk}}},
-			{Key: "review", Type: NodeAgent, Name: "Review", Skill: builtin.ID(activity.Findings),
-				Triggers: []Trigger{{FromStatus: "in_progress", ToStatus: "in_review", ItemType: "*", Mode: ModeAsk}}},
-			{Key: "in_review", Type: NodeStatus, Name: "In review", Status: &activity.StatusTarget{Category: "in_review"}},
-			{Key: "owner", Type: NodeApproval, Name: "Owner decides"},
-			{Key: "end", Type: NodeEnd, Name: "End"},
-		},
-		Edges: []Edge{
-			{From: "plan", To: "quality", On: activity.OutcomeDone, Start: ModeAsk},
-			{From: "build", To: "review", On: activity.OutcomeDone, Start: ModeAsk},
-			{From: "review", To: "build", On: activity.OutcomeChangesRequested, Start: ModeAsk},
-			{From: "review", To: "in_review", On: activity.OutcomeApproved},
-			{From: "quality", To: "owner", On: activity.OutcomeExhausted},
-			{From: "in_review", To: "end", On: activity.OutcomeDone},
-		},
-	}
-}
-
-// DefaultResolved is Default resolved (built-in skills only).
-func DefaultResolved() Resolved {
-	r, _ := Default().Resolve(nil)
-	return r
-}
 
 // Options control scope-dependent validation. Whether an organization may
 // use auto edges outside loops (its switch and plan) is the host's policy,
@@ -431,16 +281,27 @@ func (g Graph) Next(from string, on activity.Outcome) (Edge, bool) {
 	return g.Edges[i], true
 }
 
-// Outcomes lists the outcomes a node may have an edge for.
+// Outcomes lists the outcomes a node may have an edge for. A code step
+// reaches "changes requested" only through a person's decision on its
+// revision, so it has that outcome only while it requires human acceptance
+// (Requires.Acceptance); Validate refuses the edge otherwise.
 func (r Resolved) Outcomes(n Node) []activity.Outcome {
 	switch n.Type {
 	case NodeAgent:
-		if r.Runner(n.Key) == activity.Findings {
+		switch r.Runner(n.Key) {
+		case activity.Findings:
 			return []activity.Outcome{activity.OutcomeApproved, activity.OutcomeChangesRequested, activity.OutcomeFailed}
+		case activity.Code:
+			if !n.Requires.Acceptance {
+				return []activity.Outcome{activity.OutcomeDone, activity.OutcomeFailed}
+			}
 		}
 		return []activity.Outcome{activity.OutcomeDone, activity.OutcomeChangesRequested, activity.OutcomeFailed}
 	case NodeLoop:
 		return []activity.Outcome{activity.OutcomeExhausted}
+	case NodeApproval:
+		// A person's decision; a node with neither edge is a plain hand-off.
+		return []activity.Outcome{activity.OutcomeApproved, activity.OutcomeChangesRequested}
 	case NodeStatus:
 		return []activity.Outcome{activity.OutcomeDone}
 	}
@@ -507,6 +368,22 @@ func (g Resolved) Validate(opt Options) error {
 		}
 		if n.Type != NodeStatus && n.Status != nil {
 			add(n.Key, "status", "only status nodes set a status")
+		}
+		switch {
+		case n.Note != "" && n.Type != NodeApproval:
+			add(n.Key, "note", "only hand-offs to a person have a note")
+		case !utf8.ValidString(n.Note) || utf8.RuneCountInString(n.Note) > MaxNoteLength:
+			add(n.Key, "note", "at most %d characters", MaxNoteLength)
+		}
+		switch {
+		case n.Approver != "" && n.Type != NodeApproval:
+			add(n.Key, "approver", "only hand-offs to a person have an approver")
+		case !n.Approver.Valid():
+			add(n.Key, "approver", "approver is owner, team_managers or reviewers")
+		case doc && n.Approver.OrDefault() != activity.ApproverOwner:
+			// A docs page run has no team or project: nobody but the run's
+			// owner (and organization owners and admins) could decide.
+			add(n.Key, "approver", "docs page approvals are decided by the run's owner")
 		}
 		switch {
 		case !n.Location.Valid():
@@ -700,8 +577,10 @@ func (g Resolved) validateEdges(keys map[string]Node, member map[string]string, 
 			add(n.Key, "edges", "a loop needs an edge back to its first step")
 		}
 	}
-	// Cycles are allowed only inside loops: collapse every loop into one
-	// node, drop its internal edges and require the rest to be acyclic.
+	// Work repeats only inside a loop or on a person's decision: collapse
+	// every loop into one node, drop its internal edges and the edges that
+	// leave an approval node (a person decides each time they are taken)
+	// and require the rest to be acyclic.
 	rep := func(k string) string {
 		if l := member[k]; l != "" {
 			return l
@@ -709,14 +588,37 @@ func (g Resolved) validateEdges(keys map[string]Node, member map[string]string, 
 		return k
 	}
 	adj := map[string][]string{}
+	// decisions holds the paths that run no step: from an approval or
+	// status node to the next approval or status node. A cycle there is a
+	// decision that leads only back to a decision.
+	decisions := map[string][]string{}
+	passive := func(k string) bool { return keys[k].Type == NodeApproval || keys[k].Type == NodeStatus }
 	for _, e := range g.Edges {
 		a, b := rep(e.From), rep(e.To)
-		if a != b {
+		if a != b && keys[e.From].Type != NodeApproval {
 			adj[a] = append(adj[a], b)
 		}
+		if passive(e.From) && passive(e.To) {
+			decisions[e.From] = append(decisions[e.From], e.To)
+		}
 	}
+	nodes := make([]string, 0, len(g.Nodes))
+	for _, n := range g.Nodes {
+		nodes = append(nodes, rep(n.Key))
+	}
+	if cyclic(nodes, adj) {
+		add("", "edges", "steps can only repeat inside a loop or after a person's decision")
+	}
+	if cyclic(nodes, decisions) {
+		add("", "edges", "a hand-off's decision must lead to a step or an end, not back to a hand-off")
+	}
+}
+
+// cyclic reports whether the directed graph adj has a cycle reachable from
+// nodes.
+func cyclic(nodes []string, adj map[string][]string) bool {
 	state := map[string]int{}
-	cyclic := false
+	found := false
 	var visit func(string)
 	visit = func(k string) {
 		state[k] = 1
@@ -725,19 +627,17 @@ func (g Resolved) validateEdges(keys map[string]Node, member map[string]string, 
 			case 0:
 				visit(next)
 			case 1:
-				cyclic = true
+				found = true
 			}
 		}
 		state[k] = 2
 	}
-	for _, n := range g.Nodes {
-		if state[rep(n.Key)] == 0 {
-			visit(rep(n.Key))
+	for _, k := range nodes {
+		if state[k] == 0 {
+			visit(k)
 		}
 	}
-	if cyclic {
-		add("", "edges", "steps can only repeat inside a quality loop")
-	}
+	return found
 }
 
 func (g Resolved) nodeLabel(n Node) string {
@@ -789,20 +689,34 @@ func (g Graph) validateReach(keys map[string]Node, member map[string]string, add
 // starts the loop's next iteration (Back). An edge between two steps of the
 // same loop (InLoop) is automatic exactly when the loop advances by itself; its own
 // start is ignored (pinned versions may still carry one). The hop carries
-// the target step's location rule; the host fills its Location.
-func (g Resolved) Hop(e Edge) activity.FlowHop {
+// the target step's location rule; the host fills its Location. A hop that
+// ends at an approval node carries the node's name, note and approver and,
+// in Decide, the hop of each decision the node has an edge for.
+func (g Resolved) Hop(e Edge) activity.FlowHop { return g.hop(e, nil) }
+
+// hop resolves an edge; passed lists the status and approval nodes the
+// path went through to get here, and the path stops at a node it passed
+// before, so a graph that was never validated cannot cycle (validation
+// refuses such cycles).
+func (g Resolved) hop(e Edge, passed []string) activity.FlowHop {
 	hop := activity.FlowHop{Auto: e.Auto()}
 	loop, inner := g.innerLoop(e)
 	if inner {
 		hop.Auto, hop.InLoop = loop.Loop != nil && loop.Loop.AutoAdvance(), true
 	}
-	for range MaxNodes + 1 {
+	for {
 		n, ok := g.Node(e.To)
 		if !ok {
 			return hop
 		}
+		again := slices.Contains(passed, n.Key)
 		switch n.Type {
 		case NodeStatus:
+			if again {
+				hop.Stop = n.Key
+				return hop
+			}
+			passed = append(slices.Clip(passed), n.Key)
 			if n.Status != nil {
 				hop.Statuses = append(hop.Statuses, *n.Status)
 			}
@@ -817,7 +731,20 @@ func (g Resolved) Hop(e Edge) activity.FlowHop {
 			hop.Stop = n.Key
 			return hop
 		case NodeApproval:
-			hop.Stop, hop.Approval = n.Key, true
+			hop.Stop, hop.Approval, hop.Note = n.Key, true, n.Note
+			hop.StopName, hop.Approver = cmp.Or(n.Name, n.Key), n.Approver
+			if again {
+				return hop
+			}
+			passed = append(slices.Clip(passed), n.Key)
+			for _, o := range g.Outcomes(n) {
+				if next, ok := g.Next(n.Key, o); ok {
+					if hop.Decide == nil {
+						hop.Decide = map[activity.Outcome]activity.FlowHop{}
+					}
+					hop.Decide[o] = g.hop(next, passed)
+				}
+			}
 			return hop
 		case NodeLoop:
 			if len(n.Body) == 0 {
@@ -830,7 +757,6 @@ func (g Resolved) Hop(e Edge) activity.FlowHop {
 		hop.Back = inner && isEntry(loop, n.Key)
 		return hop
 	}
-	return hop
 }
 
 // StepRule is a board rule compiled from a step trigger.

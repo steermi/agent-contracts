@@ -236,7 +236,7 @@ func TestCompatBoundaries(t *testing.T) {
 		c := r
 		err := c.Apply(owner, activity.Command{Type: activity.Decide, ExpectedVersion: c.Version, Decision: activity.Accept, EvidenceDigest: c.EvidenceDigest()})
 		assert.ErrorIs(t, err, activity.ErrForbidden)
-		assert.NotContains(t, c.AllowedCommands(owner), activity.Decide)
+		assert.NotContains(t, c.AllowedCommands(owner, activity.HostFacts{}), activity.Decide)
 	})
 	t.Run("acceptance waits for verified checks", func(t *testing.T) {
 		c := r
@@ -406,7 +406,7 @@ func TestCompatDismissFinding(t *testing.T) {
 		"command":          cmd,
 		"run":              r,
 		"evidence_digest":  r.EvidenceDigest(),
-		"allowed_commands": r.AllowedCommands(owner),
+		"allowed_commands": r.AllowedCommands(owner, activity.HostFacts{}),
 	})
 }
 
@@ -517,7 +517,7 @@ func TestCompatFlowRunUX(t *testing.T) {
 		"v2_has_auto_outside":   flow.Default().HasAutoOutsideLoops(),
 		"run":                   run,
 		"paused_run_auto":       auto,
-		"allowed_commands":      run.AllowedCommands(owner),
+		"allowed_commands":      run.AllowedCommands(owner, activity.HostFacts{}),
 		"successor_placement":   map[string]any{"runner": placed.Runner, "location": placed.Location, "step_mode": placed.StepMode, "chosen": placed.LocationChosen},
 		"chosen_placement":      map[string]any{"runner": chosen.Runner, "location": chosen.Location, "step_mode": chosen.StepMode, "chosen": chosen.LocationChosen},
 		"can_choose_location":   run.CanChooseLocation(owner),
@@ -528,5 +528,54 @@ func TestCompatFlowRunUX(t *testing.T) {
 			activity.BlockerDetailAccessLost, activity.BlockerDetailInputsMoved},
 		"paused_reasons": []activity.AdvancePausedReason{activity.PausedOwnerInactive, activity.PausedProjectMoved,
 			activity.PausedAutoNotAllowed, activity.PausedNoProviderKey, activity.PausedRouteNotAllowed},
+	})
+}
+
+// Approval nodes with edges: the graph fields, the hop pinned on a run that
+// stops there, the decision commands and the run fields a decision adds.
+func TestCompatApproval(t *testing.T) {
+	g := flow.Default()
+	for i := range g.Nodes {
+		if g.Nodes[i].Type == flow.NodeApproval {
+			g.Nodes[i].Approver, g.Nodes[i].Note = activity.ApproverTeamManagers, "Check the acceptance criteria."
+		}
+	}
+	g.Edges = append(g.Edges,
+		flow.Edge{From: "owner", To: "quality", On: activity.OutcomeChangesRequested},
+		flow.Edge{From: "owner", To: "in_review", On: activity.OutcomeApproved})
+	r, issues := g.Resolve(nil)
+	require.Empty(t, issues)
+	require.NoError(t, r.Validate(flow.Options{}))
+	ref, ok := r.Ref("v1", "review", nil)
+	require.True(t, ok)
+	// The host pins where each hop's step runs, decision hops included.
+	back := ref.Loop.Exhausted.Decide[activity.OutcomeChangesRequested]
+	back.Location = activity.Cloud
+	ref.Loop.Exhausted.Decide[activity.OutcomeChangesRequested] = back
+
+	run := activity.Run{ID: "r", Runner: activity.Findings, State: activity.Submitted, Version: 1, OwnerID: "owner", Location: activity.Cloud,
+		Recommendation: activity.Inconclusive, Flow: &ref, CreatedAt: time.Unix(0, 0).UTC(), UpdatedAt: time.Unix(0, 0).UTC()}
+	lead := activity.Actor{UserID: "lead", Role: "member"}
+	manages := activity.HostFacts{TeamManager: true}
+	waiting, ok := run.Approval(activity.DecisionFence{})
+	require.True(t, ok)
+	require.True(t, waiting.Waiting)
+	allowed := run.AllowedCommands(lead, manages)
+	require.NoError(t, run.Apply(lead, activity.Command{Type: activity.RequestStepChanges, ExpectedVersion: 1, Reason: "Handle the empty list.", Facts: manages}))
+	require.Len(t, run.StepDecisions, 1)
+	run.StepDecisions[0].At, run.UpdatedAt = time.Unix(0, 0).UTC(), time.Unix(0, 0).UTC()
+	next, err := run.Successor(activity.Actor{UserID: "owner", Role: "member", Purpose: activity.PurposeFlow}, activity.Command{Type: activity.Next, ExpectedVersion: run.Version})
+	require.NoError(t, err)
+	hop, stop, _ := run.FlowNext()
+	golden(t, "approval", map[string]any{
+		"graph":             g,
+		"pinned":            ref,
+		"approver_commands": allowed,
+		"decided_run":       run,
+		"decided_hop":       hop,
+		"decided_stop":      stop,
+		// The successor's feedback is what its run stores (Run.Feedback).
+		"successor_feedback": next.Feedback,
+		"public":             map[string]bool{"approve_step": activity.ApproveStep.Public(), "request_step_changes": activity.RequestStepChanges.Public()},
 	})
 }

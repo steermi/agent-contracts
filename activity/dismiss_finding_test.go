@@ -51,10 +51,10 @@ func TestDismissFindingRoles(t *testing.T) {
 		err := r.Apply(tc.actor, cmd)
 		if tc.err == nil {
 			assert.NoError(t, err, tc.name)
-			assert.Contains(t, submittedFindingsRun().AllowedCommands(tc.actor), DismissFinding, tc.name)
+			assert.Contains(t, submittedFindingsRun().AllowedCommands(tc.actor, HostFacts{}), DismissFinding, tc.name)
 		} else {
 			assert.ErrorIs(t, err, tc.err, tc.name)
-			assert.NotContains(t, submittedFindingsRun().AllowedCommands(tc.actor), DismissFinding, tc.name)
+			assert.NotContains(t, submittedFindingsRun().AllowedCommands(tc.actor, HostFacts{}), DismissFinding, tc.name)
 		}
 	}
 }
@@ -81,7 +81,7 @@ func TestDismissFindingStates(t *testing.T) {
 		r := submittedFindingsRun()
 		mutate(&r)
 		assert.ErrorIs(t, r.Apply(owner, cmd), ErrConflict, name)
-		assert.NotContains(t, r.AllowedCommands(owner), DismissFinding, name)
+		assert.NotContains(t, r.AllowedCommands(owner, HostFacts{}), DismissFinding, name)
 	}
 
 	stale := submittedFindingsRun()

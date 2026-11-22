@@ -127,7 +127,7 @@
       {
         "key": "quality",
         "type": "loop",
-        "name": "Quality loop",
+        "name": "Build and review",
         "requires": {},
         "body": [
           "build",
@@ -137,6 +137,7 @@
           "max_iterations": 3,
           "stop_below": "high",
           "stall_rounds": 2,
+          "stall_match": "location",
           "advance": "auto"
         }
       },
@@ -183,7 +184,7 @@
       {
         "key": "owner",
         "type": "approval",
-        "name": "Owner decides",
+        "name": "Needs a decision",
         "requires": {}
       },
       {
@@ -216,6 +217,11 @@
         "on": "approved"
       },
       {
+        "from": "review",
+        "to": "owner",
+        "on": "failed"
+      },
+      {
         "from": "quality",
         "to": "owner",
         "on": "exhausted"
@@ -227,5 +233,5 @@
       }
     ]
   },
-  "default_flow_digest": "98c6bc98f1efb43187436a9792e213a8aac4813c0c63295b38aa5c0b57715a35"
+  "default_flow_digest": "8ed510884ad8a30e9c790eab7ec276fc9edc0552b3de5830adb8a44d2a749b29"
 }

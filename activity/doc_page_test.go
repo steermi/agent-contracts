@@ -55,8 +55,8 @@ func TestDocPageRunIsNotASession(t *testing.T) {
 		assert.False(t, r.Capabilities.Allows(tool), tool)
 	}
 	assert.True(t, r.Capabilities.Allows("submit_review_findings"))
-	assert.Contains(t, r.AllowedCommands(owner), Confirm)
-	assert.NotContains(t, r.AllowedCommands(owner), TakeLocal)
+	assert.Contains(t, r.AllowedCommands(owner, HostFacts{}), Confirm)
+	assert.NotContains(t, r.AllowedCommands(owner, HostFacts{}), TakeLocal)
 
 	org, err := NewRun("run", "org", "", "", owner, Request{Runner: Answer, Location: Cloud, InputDigest: "page@3", Subject: docPageSubject("organization", "org")}, nil)
 	require.NoError(t, err)
@@ -103,8 +103,8 @@ func TestDocPageRunStaysInTheCloud(t *testing.T) {
 	assert.ErrorIs(t, r.Apply(owner, Command{Type: Handoff, ExpectedVersion: r.Version}), ErrForbidden, "handoff waits for a local resume")
 	coordinator := Actor{OrgID: "org", UserID: "system", Purpose: PurposeCoordinator}
 	require.NoError(t, r.Apply(coordinator, Command{Type: Interrupt, ExpectedVersion: r.Version, Blocker: BlockerOrgBudget}))
-	assert.NotContains(t, r.AllowedCommands(owner), TakeLocal)
-	assert.Contains(t, r.AllowedCommands(owner), ResumeCloud, "a blocked cloud run resumes in the cloud")
+	assert.NotContains(t, r.AllowedCommands(owner, HostFacts{}), TakeLocal)
+	assert.Contains(t, r.AllowedCommands(owner, HostFacts{}), ResumeCloud, "a blocked cloud run resumes in the cloud")
 	require.NoError(t, r.Apply(owner, Command{Type: ResumeCloud, ExpectedVersion: r.Version}))
 	assert.Equal(t, Cloud, r.Location)
 	assert.Equal(t, Ready, r.State)
