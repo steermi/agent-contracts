@@ -202,26 +202,20 @@ func TestFindingFieldsKeepDigests(t *testing.T) {
 
 func TestEvaluatePageTrigger(t *testing.T) {
 	for _, tc := range []struct {
-		name     string
-		trigger  PageTrigger
-		event    string
-		location Location
-		owner    string
-		state    State
-		fires    bool
+		name    string
+		trigger PageTrigger
+		event   string
+		fires   bool
 	}{
-		{"ask on publish", PageTrigger{PageEventPublished, "ask"}, PageEventPublished, Cloud, "u", Suggested, true},
-		{"auto on update", PageTrigger{PageEventUpdated, "auto"}, PageEventUpdated, Cloud, "u", Ready, true},
-		{"auto without owner", PageTrigger{PageEventUpdated, "auto"}, PageEventUpdated, Cloud, "", Waiting, true},
-		{"auto never local", PageTrigger{PageEventUpdated, "auto"}, PageEventUpdated, Local, "u", Suggested, true},
-		{"other event", PageTrigger{PageEventPublished, "auto"}, PageEventUpdated, Cloud, "u", Suggested, false},
-		{"off", PageTrigger{PageEventPublished, "off"}, PageEventPublished, Cloud, "u", Suggested, false},
-		{"unknown mode", PageTrigger{PageEventPublished, "always"}, PageEventPublished, Cloud, "u", Suggested, false},
-		{"unknown event", PageTrigger{"deleted", "ask"}, "deleted", Cloud, "u", Suggested, false},
+		{"ask on publish", PageTrigger{PageEventPublished, "ask"}, PageEventPublished, true},
+		{"ask on update", PageTrigger{PageEventUpdated, "ask"}, PageEventUpdated, true},
+		{"other event", PageTrigger{PageEventPublished, "ask"}, PageEventUpdated, false},
+		{"off", PageTrigger{PageEventPublished, "off"}, PageEventPublished, false},
+		{"auto is not a page trigger mode", PageTrigger{PageEventPublished, "auto"}, PageEventPublished, false},
+		{"unknown mode", PageTrigger{PageEventPublished, "always"}, PageEventPublished, false},
+		{"unknown event", PageTrigger{"deleted", "ask"}, "deleted", false},
 	} {
-		state, fires := EvaluatePageTrigger(tc.trigger, tc.event, tc.location, tc.owner)
-		assert.Equal(t, tc.fires, fires, tc.name)
-		assert.Equal(t, tc.state, state, tc.name)
+		assert.Equal(t, tc.fires, EvaluatePageTrigger(tc.trigger, tc.event), tc.name)
 	}
 }
 

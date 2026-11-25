@@ -47,6 +47,10 @@ const (
 	ModeAuto = "auto"
 )
 
+// PageTriggerModes are the modes of a docs page trigger: a page trigger run
+// has no automation owner, so it is always left suggested (no auto).
+var PageTriggerModes = []string{ModeOff, ModeAsk}
+
 // NodeType is the kind of a flow node.
 type NodeType string
 
@@ -495,8 +499,8 @@ func (g Resolved) validatePageTriggers(n Node, doc bool, seen map[string]string,
 		switch {
 		case !slices.Contains(pageEvents, t.Event):
 			add(n.Key, "page_triggers", "unknown page event %q", t.Event)
-		case !slices.Contains(modes, t.Mode):
-			add(n.Key, "page_triggers", "mode must be off, ask or auto")
+		case !slices.Contains(PageTriggerModes, t.Mode):
+			add(n.Key, "page_triggers", "page triggers are off or ask")
 		}
 		if other, dup := seen[t.Event]; dup {
 			add(n.Key, "page_triggers", "the same page event already starts %q", other)

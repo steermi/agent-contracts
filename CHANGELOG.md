@@ -5,6 +5,24 @@ All notable changes to this module are listed here. The format follows
 [semantic versioning](https://semver.org/) (0.x: minor versions may break the
 API).
 
+## 0.5.0 - unreleased
+
+Release order: service first, then the CLI. The CLI does not evaluate page
+triggers; it only needs the bump to build against 0.5.0.
+
+### Changed (breaking)
+
+- Docs page triggers are off or ask (`flow.PageTriggerModes`, new): a page
+  trigger run has no automation owner, so it is always left suggested.
+  `Resolved.Validate` refuses `auto` on a page trigger ("page triggers are
+  off or ask"); board triggers and edges keep off/ask/auto.
+- `activity.EvaluatePageTrigger(t, event) bool`: the `location` and `owner`
+  parameters and the returned state are gone (a fired page trigger is always
+  suggested). `auto` no longer fires.
+- `testdata/compat/doc_page.json`: the triggered flow's `check` page trigger
+  is `ask` (was `auto`), so its digest changes. Hosts rewrite stored docs page
+  graphs with `auto` page triggers to `ask` before upgrading.
+
 ## 0.4.0 - unreleased
 
 Release order: service first, then the CLI. The CLI must bump with this

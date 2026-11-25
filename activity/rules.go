@@ -61,30 +61,20 @@ const (
 )
 
 // PageTrigger starts a docs page flow step when a page is published or
-// updated. Mode is off, ask or auto, as for board rules.
+// updated. Mode is off or ask (flow.PageTriggerModes): a page trigger run
+// has no automation owner, so it is always left suggested for a person to
+// start.
 type PageTrigger struct {
 	Event string `json:"event"`
 	Mode  string `json:"mode"`
 }
 
-// EvaluatePageTrigger reports whether a page event fires the trigger and the
-// state of the run it starts. Auto starts only cloud runs; unknown events and
-// modes never fire.
-func EvaluatePageTrigger(t PageTrigger, event string, location Location, owner string) (State, bool) {
+// EvaluatePageTrigger reports whether a page event fires the trigger. A
+// fired trigger's run is suggested; unknown events, off and unknown modes
+// never fire.
+func EvaluatePageTrigger(t PageTrigger, event string) bool {
 	if event != PageEventPublished && event != PageEventUpdated || t.Event != event {
-		return Suggested, false
+		return false
 	}
-	switch t.Mode {
-	case "ask":
-		return Suggested, true
-	case "auto":
-		if location != Cloud {
-			return Suggested, true
-		}
-		if owner == "" {
-			return Waiting, true
-		}
-		return Ready, true
-	}
-	return Suggested, false
+	return t.Mode == "ask"
 }

@@ -88,7 +88,7 @@ func docGraph() flow.Graph {
 		Start:   "draft",
 		Nodes: []flow.Node{
 			{Key: "draft", Type: flow.NodeAgent, Skill: "steermi:plan", PageTriggers: []activity.PageTrigger{{Event: activity.PageEventUpdated, Mode: flow.ModeAsk}}},
-			{Key: "check", Type: flow.NodeAgent, Skill: "steermi:review", PageTriggers: []activity.PageTrigger{{Event: activity.PageEventPublished, Mode: flow.ModeAuto}}},
+			{Key: "check", Type: flow.NodeAgent, Skill: "steermi:review", PageTriggers: []activity.PageTrigger{{Event: activity.PageEventPublished, Mode: flow.ModeAsk}}},
 			{Key: "owner", Type: flow.NodeApproval},
 			{Key: "end", Type: flow.NodeEnd},
 		},
@@ -107,7 +107,7 @@ func TestDocPageFlowValidation(t *testing.T) {
 	require.NoError(t, r.Validate(flow.Options{}))
 	assert.Equal(t, []flow.PageStepRule{
 		{Node: "draft", Runner: activity.Answer, Trigger: activity.PageTrigger{Event: activity.PageEventUpdated, Mode: flow.ModeAsk}},
-		{Node: "check", Runner: activity.Findings, Trigger: activity.PageTrigger{Event: activity.PageEventPublished, Mode: flow.ModeAuto}},
+		{Node: "check", Runner: activity.Findings, Trigger: activity.PageTrigger{Event: activity.PageEventPublished, Mode: flow.ModeAsk}},
 	}, r.PageRules())
 
 	tests := []struct {
@@ -126,6 +126,8 @@ func TestDocPageFlowValidation(t *testing.T) {
 		{"code step", func(g *flow.Graph) { node(g, "draft").Skill = "steermi:build" }, "skill"},
 		{"unknown event", func(g *flow.Graph) { node(g, "draft").PageTriggers[0].Event = "deleted" }, "page_triggers"},
 		{"bad mode", func(g *flow.Graph) { node(g, "draft").PageTriggers[0].Mode = "always" }, "page_triggers"},
+		// A page trigger run has no automation owner: it is always suggested.
+		{"auto page trigger", func(g *flow.Graph) { node(g, "check").PageTriggers[0].Mode = flow.ModeAuto }, "page_triggers"},
 		{"duplicate event", func(g *flow.Graph) { node(g, "check").PageTriggers[0].Event = activity.PageEventUpdated }, "page_triggers"},
 		{"page trigger off an agent", func(g *flow.Graph) {
 			node(g, "end").PageTriggers = []activity.PageTrigger{{Event: activity.PageEventUpdated, Mode: flow.ModeAsk}}

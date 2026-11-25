@@ -300,7 +300,7 @@ func TestCompatDocPage(t *testing.T) {
 		Subject: flow.SubjectDocPage, Start: "draft",
 		Nodes: []flow.Node{
 			{Key: "draft", Type: flow.NodeAgent, Name: "Draft", Skill: "steermi:plan", PageTriggers: []activity.PageTrigger{{Event: activity.PageEventUpdated, Mode: flow.ModeAsk}}},
-			{Key: "check", Type: flow.NodeAgent, Name: "Check", Skill: "steermi:review", PageTriggers: []activity.PageTrigger{{Event: activity.PageEventPublished, Mode: flow.ModeAuto}}},
+			{Key: "check", Type: flow.NodeAgent, Name: "Check", Skill: "steermi:review", PageTriggers: []activity.PageTrigger{{Event: activity.PageEventPublished, Mode: flow.ModeAsk}}},
 			{Key: "end", Type: flow.NodeEnd},
 		},
 		Edges: []flow.Edge{

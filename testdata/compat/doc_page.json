@@ -135,7 +135,7 @@
         "page_triggers": [
           {
             "event": "published",
-            "mode": "auto"
+            "mode": "ask"
           }
         ]
       },
@@ -159,6 +159,6 @@
       }
     ]
   },
-  "triggered_flow_digest": "4e2656eb7562064922434ef04195f98ca80a7e378e2a8e317f35bb17a759dedc",
+  "triggered_flow_digest": "95d5225a6243dc3fa6fe75007ccd4b18b460a1b4c7f16e709eb9fbb2c54912ae",
   "work_item_default_digest": "8ed510884ad8a30e9c790eab7ec276fc9edc0552b3de5830adb8a44d2a749b29"
 }
