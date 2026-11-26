@@ -152,8 +152,14 @@ const (
 	ApplyFixes         CommandType = "apply_fixes"
 	// DismissFinding records why a person set one finding of a submitted
 	// findings run aside (Finding.DismissalReason): applied by hand, or not
-	// worth acting on. It never changes the evidence digest.
+	// worth acting on. It never changes the evidence digest; like answers
+	// it locks once the run hands off or someone decides on it (notesOpen).
 	DismissFinding CommandType = "dismiss_finding"
+	// ResolveFinding records a person's answer to a decide finding of a
+	// submitted findings run (Finding.Resolution: Choice, and Reason as the
+	// text). It never changes the evidence digest; answering again replaces
+	// the earlier answer until the run hands off or someone decides on it.
+	ResolveFinding CommandType = "resolve_finding"
 	// SetStepMode changes the run's StepMode while its flow runs (owner or
 	// manager; any non-terminal run, so also a submitted run whose next hop
 	// has not started yet).
@@ -165,8 +171,11 @@ const (
 	// the Feedback of the step the hop starts.
 	ApproveStep        CommandType = "approve_step"
 	RequestStepChanges CommandType = "request_step_changes"
-	// MaxDismissalReasonRunes bounds a DismissFinding reason.
-	MaxDismissalReasonRunes = 600
+	// MaxFindingNoteRunes bounds a person's note on a finding: a
+	// DismissFinding reason or a ResolveFinding text.
+	MaxFindingNoteRunes = 600
+	// MaxRunIDBytes bounds a run id a request refers to (LinkedFromID).
+	MaxRunIDBytes = 128
 	// Internal commands; never accepted from an API caller.
 	CloseMeeting       CommandType = "close_meeting"
 	RecordMeetingRecap CommandType = "meeting_recap"
@@ -180,7 +189,7 @@ const (
 // Public reports whether API callers may send the command.
 func (t CommandType) Public() bool {
 	switch t {
-	case CloseMeeting, StopMeetingTurn, Continue, Confirm, Retry, Clarify, TakeLocal, ResumeCloud, Cancel, Submit, SubmitFindings, Decide, Revise, Next, ApplyFixes, Refine, DismissFinding, SetStepMode, ApproveStep, RequestStepChanges:
+	case CloseMeeting, StopMeetingTurn, Continue, Confirm, Retry, Clarify, TakeLocal, ResumeCloud, Cancel, Submit, SubmitFindings, Decide, Revise, Next, ApplyFixes, Refine, DismissFinding, ResolveFinding, SetStepMode, ApproveStep, RequestStepChanges:
 		return true
 	}
 	return false
@@ -232,25 +241,6 @@ func (p Policy) allowsReviewer(userID string) bool {
 	return len(p.ReviewerIDs) == 0 || slices.Contains(p.ReviewerIDs, userID)
 }
 
-type Finding struct {
-	ID              string   `json:"id"`
-	Severity        Severity `json:"severity"`
-	Location        string   `json:"location,omitempty"`
-	Description     string   `json:"description"`
-	DismissalReason string   `json:"dismissal_reason,omitempty"`
-	// Target names what the finding compares the subject against (another
-	// page, an AI rule, the project brief); the quotes cite both sides and
-	// Suggestion proposes what a person may do about it (finding.go).
-	Target       *FindingTarget     `json:"target,omitempty"`
-	SubjectQuote string             `json:"subject_quote,omitempty"`
-	TargetQuote  string             `json:"target_quote,omitempty"`
-	Suggestion   *FindingSuggestion `json:"suggestion,omitempty"`
-	// Expected and Observed state what should happen and what the reviewer
-	// saw instead (≤ MaxLoopTextRunes each); later loop rounds read them
-	// from the loop ledger.
-	Expected string `json:"expected,omitempty"`
-	Observed string `json:"observed,omitempty"`
-}
 type Check struct {
 	RepositoryID  string      `json:"repository_id"`
 	CommitSHA     string      `json:"commit_sha"`
@@ -339,6 +329,13 @@ type Run struct {
 	// SubmitFindings; ≤ MaxLoopTextRunes). A label for people and later loop
 	// rounds, never an input to a stop.
 	Tried string `json:"tried,omitempty"`
+	// LinkedFromID names a run on another subject whose findings this run
+	// applies (a docs fix on the page a check of another page found wrong;
+	// ≤ MaxRunIDBytes). It is a reference, not a parent: the chains stay on
+	// their subjects. Retry and Refine keep it (the same fix again); Next
+	// and ApplyFixes successors do not (they follow this run, not the
+	// check).
+	LinkedFromID string `json:"linked_from_id,omitempty"`
 	// Feedback is the person's change request the run works from (nil
 	// without one). The text is a person's, not the owner's: hosts give it
 	// to the model as data, never as instructions.
@@ -382,6 +379,8 @@ type Request struct {
 	Origin                   string      `json:"origin"`
 	CausationID              string      `json:"causation_id,omitempty"`
 	PredecessorID            string      `json:"predecessor_id,omitempty"`
+	// LinkedFromID: Run.LinkedFromID of the new run (docs page runs only).
+	LinkedFromID string `json:"linked_from_id,omitempty"`
 	// Feedback carries a person's change request into the successor
 	// (SuccessorRun.Feedback).
 	Feedback *Feedback `json:"feedback,omitempty"`
@@ -393,6 +392,15 @@ type Request struct {
 	StepMode StepMode `json:"step_mode,omitempty"`
 	Policy   Policy   `json:"-"`
 }
+
+// Command is one change a caller asks of a run (Run.Apply) or a follow-up
+// it starts (Run.Successor). Reason is the person's free text for every
+// command, whatever the command calls it: a resume note (TakeLocal,
+// ResumeCloud), a decision's reason (Decide, ApproveStep,
+// RequestStepChanges), feedback (Refine), a dismissal reason
+// (DismissFinding) or an answer's text (ResolveFinding); for the runner's
+// Clarify and Fail it is the runner's question or failure. Commands never
+// add a field of their own for that text.
 type Command struct {
 	MeetingRecapSaved bool           `json:"-"`
 	Turn              *MeetingTurn   `json:"-"`
@@ -410,9 +418,13 @@ type Command struct {
 	Decision          DecisionKind   `json:"decision,omitempty"`
 	EvidenceDigest    string         `json:"evidence_digest,omitempty"`
 	Reason            string         `json:"reason,omitempty"`
-	// FindingID names the finding a DismissFinding command sets aside.
+	// FindingID names the finding a DismissFinding command sets aside or a
+	// ResolveFinding command answers.
 	FindingID string `json:"finding_id,omitempty"`
-	Check     *Check `json:"check,omitempty"`
+	// Choice is ResolveFinding's answer (required); Reason carries its text
+	// (FindingResolution.Text), as for every command (Command).
+	Choice ResolutionChoice `json:"choice,omitempty"`
+	Check  *Check           `json:"check,omitempty"`
 	// StepMode: SetStepMode's new mode (required); optional on Confirm and
 	// on Next (the successor's mode, Run.Successor).
 	StepMode StepMode `json:"step_mode,omitempty"`
@@ -450,13 +462,7 @@ func NewRun(id, org, project, item string, a Actor, q Request, parent *Run) (Run
 	if subject.Kind == SubjectSession && (project != "" || item != "" || parent != nil) {
 		return Run{}, ErrValidation
 	}
-	// A docs page run has no project or work item; its scope is the page's area.
-	if subject.Kind == SubjectDocPage && (project != "" || item != "") {
-		return Run{}, ErrValidation
-	}
-	// A docs page chain stays on its page: successors never move to another
-	// page, and work item runs never spawn page runs (or the reverse).
-	if parent != nil && (subject.Kind == SubjectDocPage || parent.IsDocPage()) && parent.RunSubject() != subject {
+	if !validPageChain(project, item, subject, parent) || !validLink(id, q, parent) {
 		return Run{}, ErrValidation
 	}
 	p := q.Policy.Normalized()
@@ -498,6 +504,7 @@ func NewRun(id, org, project, item string, a Actor, q Request, parent *Run) (Run
 	}
 	if subject.Kind == SubjectDocPage {
 		r.Capabilities = CapabilitiesForDocPage(q.Runner)
+		r.LinkedFromID = q.LinkedFromID
 	}
 	if q.Runner == Findings {
 		r.Outputs = Sources(q.Inputs)
@@ -533,17 +540,6 @@ func NewRun(id, org, project, item string, a Actor, q Request, parent *Run) (Run
 	return r, nil
 }
 
-// BindCandidate points a findings run at a submitted code run's revision before it is
-// confirmed. The caller resolves digest and inputs for the candidate outputs.
-func (r *Run) BindCandidate(candidate Run, digest string, inputs []OutputRef) {
-	r.InputDigest = digest
-	r.Inputs = inputs
-	r.Outputs = slices.Clone(candidate.Outputs)
-	r.Checks = slices.Clone(candidate.Checks)
-	r.CandidateAuthorID = candidate.OwnerID
-	r.PredecessorID = candidate.ID
-}
-
 // AttachExecution records the session and launch serving the current
 // generation. Execution resources never change the run's state.
 func (r *Run) AttachExecution(session, launch string) error {
@@ -561,6 +557,26 @@ func (r *Run) AttachExecution(session, launch string) error {
 }
 
 func (r Run) ActiveExecution() bool { return r.State == Ready || r.State == Running }
+
+// AwaitsStart reports whether the run waits for a person to start it: a
+// suggestion, or one the host held because its subject was busy with
+// another run (BlockerExecutionBusy). Hosts tell its owner so.
+func (r Run) AwaitsStart() bool {
+	return r.State == Suggested || r.State == Waiting && r.Blocker == BlockerExecutionBusy
+}
+
+// AcceptsFollowUp reports whether a person may ask follow-up questions in
+// the run's session (read only, CapabilitiesForFollowUp): once it stopped
+// working (submitted, completed, failed, cancelled). A waiting run resumes
+// in its session, so a follow-up there would become part of what it reads;
+// unknown states fail closed.
+func (r Run) AcceptsFollowUp() bool {
+	switch r.State {
+	case Submitted, Completed, Failed, Cancelled:
+		return true
+	}
+	return false
+}
 func (r Run) Terminal() bool {
 	return r.State == Cancelled || r.State == Failed || r.State == Completed
 }
@@ -574,19 +590,6 @@ func (r Run) EvidenceDigest() string {
 	}{r.InputDigest, r.Outputs, r.Checks, evidenceFindings(r.Findings), r.Recommendation})
 }
 
-// evidenceFindings is what the evidence digest covers: the findings as
-// submitted. A dismissal is a person's note on the evidence, not evidence, so
-// dismissing never invalidates decisions or re-keys a followed flow hop.
-func evidenceFindings(in []Finding) []Finding {
-	if !slices.ContainsFunc(in, func(f Finding) bool { return !f.open() }) {
-		return in
-	}
-	out := slices.Clone(in)
-	for i := range out {
-		out[i].DismissalReason = ""
-	}
-	return out
-}
 func Digest(v any) string {
 	b, _ := json.Marshal(v)
 	h := sha256.Sum256(b)
@@ -746,22 +749,22 @@ func (r *Run) apply(a Actor, c Command) error {
 		if c.Summary == "" || c.DroppedFindings < 0 || !slices.Contains([]Recommendation{Approve, ChangesRequested, Inconclusive}, c.Recommendation) {
 			return ErrValidation
 		}
+		// Notes and stray patches are dropped (Finding.submitted), then
+		// what remains is validated.
+		findings := slices.Clone(c.Findings)
 		seen := make(map[string]bool, len(c.Findings))
-		for _, f := range c.Findings {
-			if f.ID == "" || seen[f.ID] || f.Description == "" || !slices.Contains([]Severity{Critical, High, Medium, Low}, f.Severity) || f.validateReference() != nil {
+		for i, f := range findings {
+			f = f.submitted()
+			if f.ID == "" || seen[f.ID] || f.Description == "" || !slices.Contains([]Severity{Critical, High, Medium, Low}, f.Severity) || f.validateReference() != nil || r.decidesItself(f) {
 				return ErrValidation
 			}
 			seen[f.ID] = true
+			findings[i] = f
 		}
 		if r.ContradictsApprove(c) {
 			return fmt.Errorf("%w: approve contradicts a finding rated %s or above; recommend changes_requested, or lower the severity of findings that do not block", ErrValidation, r.BlockingSeverity())
 		}
-		// Only a person dismisses (DismissFinding): a submitted dismissal
-		// reason is cleared, not refused, so older runners keep working.
-		r.Findings = slices.Clone(c.Findings)
-		for i := range r.Findings {
-			r.Findings[i].DismissalReason = ""
-		}
+		r.Findings = findings
 		tried, err := cleanTried(c.Tried)
 		if err != nil {
 			return err
@@ -794,6 +797,8 @@ func (r *Run) apply(a Actor, c Command) error {
 		r.Decisions = append(r.Decisions, Decision{a.UserID, c.Decision, c.Reason, c.EvidenceDigest, time.Now().UTC()})
 	case DismissFinding:
 		return r.dismissFinding(c)
+	case ResolveFinding:
+		return r.resolveFinding(a, c)
 	case ApproveStep, RequestStepChanges:
 		return r.decideStep(a, c)
 	case Revise:

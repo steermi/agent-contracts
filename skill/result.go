@@ -13,7 +13,8 @@ import (
 const ResultKey = "steermi-result"
 
 // StartsFromKey narrows where a skill can be started (comma separated
-// subjects, see Subjects). Unset means every subject its result allows.
+// subjects, see Subjects). Unset means every subject its result allows
+// except the opt-in ones (docs pages; Manifest.StartsFrom).
 const StartsFromKey = "steermi-starts-from"
 
 // EffortKey declares how much model the skill needs: low | medium | high.
@@ -84,6 +85,10 @@ var (
 	deliveryResults  = []Result{ResultAnswer, ResultCode, ResultFindings}
 	workspaceResults = []Result{ResultBoard, ResultRefinement, ResultCyclePlanning, ResultOrgDesign, ResultProjectDiscovery, ResultProjectDocumentation, ResultResearch, ResultInitiativePlanning}
 	allSubjects      = []string{SubjectOrganization, SubjectWorkspace, SubjectTeam, SubjectProject, SubjectWorkItem, SubjectDocPage}
+	// optInSubjects are subjects a skill starts from only when its metadata
+	// names them (StartsFromKey): a skill written for work items or
+	// sessions reads oddly on a docs page.
+	optInSubjects = []string{SubjectDocPage}
 )
 
 // Results lists every result, delivery results first.
@@ -140,13 +145,18 @@ func (m Manifest) Result() Result {
 	return ResultAnswer
 }
 
-// StartsFrom lists where the skill can start: the metadata list intersected
-// with what its result allows, in the result's order.
+// StartsFrom lists where a person can start the skill: the metadata list
+// intersected with what its result allows, in the result's order; without
+// the metadata, every subject the result allows except the opt-in ones
+// (optInSubjects: docs page skills opt in with steermi-starts-from:
+// doc_page). It does not limit flow steps: a flow's author places a skill
+// on a docs page flow explicitly (flow.Graph.Resolve checks only the
+// result).
 func (m Manifest) StartsFrom() []string {
 	allowed := m.Result().Subjects()
 	raw := strings.TrimSpace(m.Metadata[StartsFromKey])
 	if raw == "" {
-		return allowed
+		return slices.DeleteFunc(allowed, func(s string) bool { return slices.Contains(optInSubjects, s) })
 	}
 	asked := splitList(raw)
 	return slices.DeleteFunc(allowed, func(s string) bool { return !slices.Contains(asked, s) })

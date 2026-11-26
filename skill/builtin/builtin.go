@@ -27,7 +27,7 @@ import (
 
 // Version identifies the built-in skill content. Bump it with every content
 // change and add a Changelog line.
-const Version = "0.10.4"
+const Version = "0.11.0"
 
 // Prefix marks built-in skill identities ("steermi:plan", the plugin:skill
 // form of Claude Code; URL-safe, so built-ins share the skill routes).
@@ -35,6 +35,7 @@ const Prefix = "steermi:"
 
 // Changelog lists what changed per version, newest first.
 var Changelog = []Change{
+	{Version: "0.11.0", Note: "Docs reconcile asks a person to decide (decide findings) when pages contradict and nothing settles which is right, and writes its summary for the page owner without run mechanics. Docs reconcile is told the shapes the contract refuses (a decide finding without both quotes, or without a rule target or a page target other than its own page) and that a patch outside page edits is dropped. Docs fix applies exactly the findings its host hands it for its page (activity.Run.FindingsFor), reads which side the page is from the finding's target and the answer from resolution only, and fixes a page whose check ran on another page (the finding's target)."},
 	{Version: "0.10.4", Note: "Build writes branches, commits and merge requests in its report and comments as markdown links with the web_url its git tools return, never an invented URL."},
 	{Version: "0.10.3", Note: "Docs reconcile and Docs fix write what people read (finding descriptions, rationales, summaries) in plain language and never name actions, tools, commands or field names there."},
 	{Version: "0.10.2", Note: "Docs reconcile requires a subject_quote on every finding and a target_quote on a finding with a doc_page target (hosts drop findings without them)."},

@@ -171,14 +171,16 @@ func TestSubmitFindingsValidatesTargetsQuotesAndSuggestions(t *testing.T) {
 		assert.NoError(t, submit(f), action)
 	}
 	cases := map[string]func(*Finding){
-		"unknown target type":   func(f *Finding) { f.Target.Type = "repository" },
-		"target without id":     func(f *Finding) { f.Target.ID = "" },
-		"long subject quote":    func(f *Finding) { f.SubjectQuote = strings.Repeat("ż", MaxFindingQuoteRunes+1) },
-		"long target quote":     func(f *Finding) { f.TargetQuote = strings.Repeat("x", MaxFindingQuoteRunes+1) },
-		"target quote alone":    func(f *Finding) { f.Target = nil; f.Suggestion = nil },
-		"unknown action":        func(f *Finding) { f.Suggestion.Action = "delete_page" },
-		"empty action":          func(f *Finding) { f.Suggestion.Action = "" },
-		"long patch":            func(f *Finding) { f.Suggestion.MarkdownPatch = strings.Repeat("x", MaxFindingPatchBytes+1) },
+		"unknown target type": func(f *Finding) { f.Target.Type = "repository" },
+		"target without id":   func(f *Finding) { f.Target.ID = "" },
+		"long subject quote":  func(f *Finding) { f.SubjectQuote = strings.Repeat("ż", MaxFindingQuoteRunes+1) },
+		"long target quote":   func(f *Finding) { f.TargetQuote = strings.Repeat("x", MaxFindingQuoteRunes+1) },
+		"target quote alone":  func(f *Finding) { f.Target = nil; f.Suggestion = nil },
+		"unknown action":      func(f *Finding) { f.Suggestion.Action = "delete_page" },
+		"empty action":        func(f *Finding) { f.Suggestion.Action = "" },
+		"long patch": func(f *Finding) {
+			f.Suggestion.Action, f.Suggestion.MarkdownPatch = SuggestUpdateTarget, strings.Repeat("x", MaxFindingPatchBytes+1)
+		},
 		"long rationale":        func(f *Finding) { f.Suggestion.Rationale = strings.Repeat("x", MaxFindingRationaleRunes+1) },
 		"target action, no one": func(f *Finding) { f.Target, f.TargetQuote = nil, "" },
 		"rule action on a page": func(f *Finding) { f.Suggestion.Action = SuggestRetireRule },

@@ -7,8 +7,8 @@ import (
 )
 
 // Submissions and evidence: what a submit records on a run (outputs,
-// findings, assumptions), dismissing findings, recorded checks and whether
-// the required checks passed.
+// findings, assumptions), recorded checks and whether the required checks
+// passed. People's notes on findings: finding_notes.go.
 
 // ChecksPassed requires every policy check to have succeeded, provider
 // verified, on every submitted repository revision.
@@ -27,28 +27,6 @@ func (r Run) ChecksPassed() bool {
 	}
 	return true
 }
-
-// dismissFinding sets one open finding aside with the person's reason. The
-// findings stay on the run; neither the evidence digest nor the outcome
-// looks at dismissals, so decisions and followed flow hops keep matching.
-func (r *Run) dismissFinding(c Command) error {
-	reason := strings.TrimSpace(c.Reason)
-	if c.FindingID == "" || reason == "" || !utf8.ValidString(reason) || utf8.RuneCountInString(reason) > MaxDismissalReasonRunes {
-		return ErrValidation
-	}
-	i := slices.IndexFunc(r.Findings, func(f Finding) bool { return f.ID == c.FindingID })
-	if i < 0 {
-		return ErrValidation
-	}
-	if !r.Findings[i].open() {
-		return ErrConflict
-	}
-	r.Findings[i].DismissalReason = reason
-	return nil
-}
-
-// open reports whether no person has dismissed the finding.
-func (f Finding) open() bool { return f.DismissalReason == "" }
 
 func (r *Run) submit(c Command) error {
 	if len(c.Outputs) == 0 {

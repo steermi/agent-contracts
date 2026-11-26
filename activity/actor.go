@@ -23,5 +23,9 @@ func (a Actor) For(runner Runner, skill *SkillRef) Actor {
 	return a
 }
 
-func (a Actor) human() bool   { return a.Purpose == "" && a.UserID != "" && a.Role != "viewer" }
+// Human reports whether a person acts, as themselves: no machine purpose
+// (executor, flow advancer, coordinator, ...), a user, and not a viewer.
+// Hosts ask it instead of testing Purpose themselves.
+func (a Actor) Human() bool { return a.Purpose == "" && a.UserID != "" && a.Role != "viewer" }
+
 func (a Actor) manager() bool { return a.Role == "owner" || a.Role == "admin" }

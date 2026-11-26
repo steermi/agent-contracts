@@ -10,6 +10,9 @@ func (r Run) guard(a Actor, c Command) error {
 	if err := r.stateGuard(a, c.Type, c.Facts); err != nil {
 		return err
 	}
+	if locksNotes(c.Type) && r.OpenDecisions() > 0 {
+		return ErrConflict
+	}
 	return r.choiceGuard(a, c)
 }
 
@@ -83,7 +86,7 @@ func (r Run) stateGuard(a Actor, t CommandType, f HostFacts) error {
 			return ErrConflict
 		}
 	case Decide:
-		if !a.human() || a.UserID == r.OwnerID || a.UserID == r.CandidateAuthorID || !r.Policy.allowsReviewer(a.UserID) {
+		if !a.Human() || a.UserID == r.OwnerID || a.UserID == r.CandidateAuthorID || !r.Policy.allowsReviewer(a.UserID) {
 			return ErrForbidden
 		}
 		if r.Blocker != "" {
@@ -93,7 +96,7 @@ func (r Run) stateGuard(a Actor, t CommandType, f HostFacts) error {
 			return ErrConflict
 		}
 	case Revise:
-		if !a.human() {
+		if !a.Human() {
 			return ErrForbidden
 		}
 	case Retry:
@@ -128,7 +131,7 @@ func (r Run) stateGuard(a Actor, t CommandType, f HostFacts) error {
 			return ErrConflict
 		}
 	case SetStepMode:
-		if !manager || !a.human() {
+		if !manager || !a.Human() {
 			return ErrForbidden
 		}
 		if !r.stepModeOpen() {
@@ -138,7 +141,7 @@ func (r Run) stateGuard(a Actor, t CommandType, f HostFacts) error {
 		// A person the approval node's approver setting names, on a run
 		// that waits there (pendingApproval), for a decision the node has
 		// an edge for, unless the host's fence makes it moot.
-		if hop := r.flowPath().hop(); !a.human() || hop.decides() && !r.mayDecideStep(a, f, hop.Approver) {
+		if hop := r.flowPath().hop(); !a.Human() || hop.decides() && !r.mayDecideStep(a, f, hop.Approver) {
 			return ErrForbidden
 		}
 		if r.Blocker != "" {
@@ -151,15 +154,16 @@ func (r Run) stateGuard(a Actor, t CommandType, f HostFacts) error {
 		if err := f.Fence.err(); err != nil {
 			return err
 		}
-	case DismissFinding:
-		// The run's owner or a manager sets findings aside, as people.
-		if !manager || !a.human() {
+	case DismissFinding, ResolveFinding:
+		// The run's owner or a manager sets findings aside or answers
+		// decide findings, as people, while the notes are open.
+		if !manager || !a.Human() {
 			return ErrForbidden
 		}
 		if r.Blocker != "" {
 			return ErrStale
 		}
-		if r.Runner != Findings || (r.State != Submitted && r.State != Completed) || !slices.ContainsFunc(r.Findings, Finding.open) {
+		if !r.notesOpen() || !slices.ContainsFunc(r.Findings, notable(t)) {
 			return ErrConflict
 		}
 	case Interrupt:
@@ -184,14 +188,14 @@ func (r Run) stateGuard(a Actor, t CommandType, f HostFacts) error {
 }
 
 // userCommands are the commands a person can act on from the run's controls.
-var userCommands = []CommandType{CloseMeeting, StopMeetingTurn, Continue, Confirm, Retry, TakeLocal, ResumeCloud, Next, ApplyFixes, Refine, Submit, SubmitFindings, Decide, DismissFinding, SetStepMode, ApproveStep, RequestStepChanges, Cancel}
+var userCommands = []CommandType{CloseMeeting, StopMeetingTurn, Continue, Confirm, Retry, TakeLocal, ResumeCloud, Next, ApplyFixes, Refine, Submit, SubmitFindings, Decide, DismissFinding, ResolveFinding, SetStepMode, ApproveStep, RequestStepChanges, Cancel}
 
 // AllowedCommands lists the controls this person may use now, given the
 // host's facts about the run (HostFacts; zero when the host has none).
 // Machine callers act through their own protocols and get none.
 func (r Run) AllowedCommands(a Actor, f HostFacts) []CommandType {
 	out := []CommandType{}
-	if !a.human() {
+	if !a.Human() {
 		return out
 	}
 	for _, t := range userCommands {

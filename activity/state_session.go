@@ -49,21 +49,21 @@ func (r Run) sessionGuard(a Actor, t CommandType, owner bool) error {
 			return ErrForbidden
 		}
 	case CloseMeeting:
-		if !a.human() || a.MeetingRole != "facilitator" {
+		if !a.Human() || a.MeetingRole != "facilitator" {
 			return ErrForbidden
 		}
 		if r.State != Waiting || r.Blocker != BlockerMeetingInput || !r.MeetingRecapSaved {
 			return ErrConflict
 		}
 	case StopMeetingTurn:
-		if !a.human() || !(owner || a.manager() || r.Turn != nil && a.UserID == r.Turn.ActorID) {
+		if !a.Human() || !(owner || a.manager() || r.Turn != nil && a.UserID == r.Turn.ActorID) {
 			return ErrForbidden
 		}
 		if !r.ActiveExecution() {
 			return ErrConflict
 		}
 	case Continue:
-		if !a.human() {
+		if !a.Human() {
 			return ErrForbidden
 		}
 		if r.State != Waiting || r.Blocker != BlockerMeetingInput {

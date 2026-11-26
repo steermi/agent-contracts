@@ -564,15 +564,24 @@ func (r Run) SuccessorNode(t CommandType) string {
 // does not matter: a local Build continues into a cloud Review; a hop pinned
 // local (or not resolved) always waits for a developer. It is the single
 // eligibility check for automatic advances: hosts record and follow them
-// with it and the PurposeFlow guard admits Next only when it holds. Whether
-// the organization allows auto edges outside loops is the host's policy.
+// with it and the PurposeFlow guard admits Next only when it holds. A
+// findings run that asked a person to decide anything (a decide finding as
+// submitted, answered or dismissed since) never follows an auto edge: a
+// person starts the hop (Next) once every question is answered or
+// dismissed; their decision at an approval node still is an
+// explicit start. It reads the findings as submitted only, so answering
+// or dismissing never makes a hop automatic. Whether the organization
+// allows auto edges outside loops is the host's policy.
 func (r Run) AutoHop() (FlowHop, bool) {
 	p := r.flowPath()
 	hop := p.hop()
 	// A person's decision at an approval node is an explicit start: the
 	// hop it chose needs no auto edge.
-	start := hop.Auto || p.decided() != nil
-	return hop, p.ok() && p.stop == "" && start && hop.Runner != "" && r.StepMode != StepModeAsk && hop.Location == Cloud
+	start := hop.Auto && !r.asksDecisions() || p.decided() != nil
+	// OpenDecisions repeats guard's locksNotes rule: hosts call AutoHop
+	// without the guard (flow advance rows, run views), so it must hold
+	// here on its own and never report a hop while a question waits.
+	return hop, p.ok() && p.stop == "" && start && hop.Runner != "" && r.StepMode != StepModeAsk && hop.Location == Cloud && r.OpenDecisions() == 0
 }
 
 // AdvancePausedReason is why the host did not start a hop AutoHop admitted

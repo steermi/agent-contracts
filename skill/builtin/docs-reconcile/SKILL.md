@@ -52,7 +52,8 @@ to change.
    steps or decisions about the same thing.
 2. **Duplicates**: the same content maintained in two places.
 3. **Superseded content**: one page replaces the other (newer decision,
-   newer process); say which one is current and why you think so.
+   newer process); say which one is current and why you think so. When the
+   pages do not show which one is current, ask (below) instead of guessing.
 4. **Stale facts**: a statement the related pages show is out of date.
 
 ## Each finding
@@ -76,14 +77,32 @@ to change.
     missing into the target.
   - `update_rule` / `retire_rule`: a pinned AI rule (`context_entry` target)
     is wrong or obsolete.
+  - `decide`: the pages contradict each other and nothing in them settles
+    which one is right: neither page replaces or cites the other, both are
+    recent, or they belong to different owners. A person answers which side
+    is right (this page, the other page, or neither with the correct fact);
+    a fix step then edits the page that is wrong. State your lean and how
+    sure you are in the rationale ("Leaning to the other page: it is the
+    finance team's runbook. Not sure."). Do not use it when one page is
+    clearly newer, replaces the other or is the owning team's page: pick the
+    fix yourself then.
   - `none`: worth knowing, nothing to change.
 - `suggestion.markdown_patch`: only for `update_target`, `update_subject` and
   `merge_into_target`: the replacement markdown for the quoted passage, at
-  most 8 KB. Omit it otherwise.
+  most 8 KB. Steermi drops it on any other action.
 - `suggestion.rationale`: one or two sentences on why this action.
+- Shapes Steermi checks (it refuses the whole submission when one finding
+  breaks them; fix the finding and submit again): a `decide` finding has a
+  `doc_page` target other than this page, or a `context_entry` target, and
+  both quotes; a rule action has a `context_entry` target.
 
 ## Finish
 
 Submit with submit_review_findings: a short summary and the
 recommendation `changes_requested` when at least one finding should change a
-page, rule or link, otherwise `approve`.
+page, rule or link or asks a person to decide, otherwise `approve`.
+
+The summary is for the page's owner: which pages you compared it with (by
+title), what you found, and the questions waiting for an answer. Two or
+three sentences. Never describe how the run works (no "pinned", "bound",
+"subject page", "sources", "run", "reconcile run", versions or ids).

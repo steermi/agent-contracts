@@ -1,0 +1,236 @@
+{
+  "allowed_commands": [
+    "dismiss_finding",
+    "resolve_finding"
+  ],
+  "command": {
+    "command": "resolve_finding",
+    "command_key": "cmd-5",
+    "expected_version": 4,
+    "reason": "Finance confirmed",
+    "finding_id": "f-1",
+    "choice": "target"
+  },
+  "evidence_digest": "a33864974863b7f78bb56728f03e132747ae431ecb188b7971fc7c1c434ae4e4",
+  "findings_for_page_2": [
+    {
+      "id": "f-2",
+      "severity": "medium",
+      "description": "Refund window is out of date on page-2",
+      "target": {
+        "type": "doc_page",
+        "id": "page-2",
+        "version": "4"
+      },
+      "subject_quote": "within 30 days",
+      "target_quote": "within 14 days",
+      "suggestion": {
+        "action": "update_target",
+        "markdown_patch": "within 30 days"
+      }
+    }
+  ],
+  "findings_for_subject": [
+    {
+      "id": "f-1",
+      "severity": "high",
+      "description": "Cutover day differs",
+      "resolution": {
+        "choice": "target",
+        "text": "Finance confirmed",
+        "by": "dev-1",
+        "at": "2026-10-20T12:00:00Z"
+      },
+      "target": {
+        "type": "doc_page",
+        "id": "page-2",
+        "version": "4"
+      },
+      "subject_quote": "the day after its billing date",
+      "target_quote": "on its billing date",
+      "suggestion": {
+        "action": "decide",
+        "rationale": "Both pages are recent."
+      }
+    }
+  ],
+  "linked_fix": {
+    "subject": {
+      "kind": "doc_page",
+      "id": "page-2",
+      "scope_type": "organization",
+      "scope_id": "org-1"
+    },
+    "id": "fix-1",
+    "project_id": "",
+    "work_item_id": "",
+    "runner": "answer",
+    "state": "failed",
+    "version": 4,
+    "generation": 1,
+    "input_digest": "50bbedb1b510bfc53651fc70e8b15278eec6c517fc53a45b283c2baa52eb79fa",
+    "inputs": [
+      {
+        "kind": "docs",
+        "resource_id": "page-2",
+        "area_id": "area-1",
+        "revision": "4",
+        "hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      }
+    ],
+    "owner_id": "dev-1",
+    "execution_location": "cloud",
+    "origin": "docs",
+    "root_id": "fix-1",
+    "round": 0,
+    "cost": 0,
+    "output_contract": "answer/1",
+    "linked_from_id": "run-1",
+    "policy": {
+      "require_acceptance": false,
+      "quorum": 0,
+      "max_repair_rounds": 6,
+      "max_cost": 20
+    },
+    "blocker": "execution_failed",
+    "created_at": "2026-10-20T12:00:00Z",
+    "updated_at": "2026-10-20T12:00:00Z"
+  },
+  "linked_fix_pages": [
+    "page-2"
+  ],
+  "linked_fix_retry": {
+    "subject": {
+      "kind": "doc_page",
+      "id": "page-2",
+      "scope_type": "organization",
+      "scope_id": "org-1"
+    },
+    "id": "fix-2",
+    "project_id": "",
+    "work_item_id": "",
+    "runner": "answer",
+    "state": "suggested",
+    "version": 1,
+    "generation": 1,
+    "input_digest": "50bbedb1b510bfc53651fc70e8b15278eec6c517fc53a45b283c2baa52eb79fa",
+    "inputs": [
+      {
+        "kind": "docs",
+        "resource_id": "page-2",
+        "area_id": "area-1",
+        "revision": "4",
+        "hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      }
+    ],
+    "owner_id": "dev-1",
+    "execution_location": "cloud",
+    "origin": "docs",
+    "root_id": "fix-1",
+    "predecessor_id": "fix-1",
+    "round": 0,
+    "cost": 0,
+    "output_contract": "answer/1",
+    "linked_from_id": "run-1",
+    "policy": {
+      "require_acceptance": false,
+      "quorum": 0,
+      "max_repair_rounds": 6,
+      "max_cost": 20
+    },
+    "created_at": "2026-10-20T12:00:00Z",
+    "updated_at": "2026-10-20T12:00:00Z"
+  },
+  "open_decisions": 0,
+  "run": {
+    "subject": {
+      "kind": "doc_page",
+      "id": "page-1",
+      "scope_type": "organization",
+      "scope_id": "org-1"
+    },
+    "id": "run-1",
+    "project_id": "",
+    "work_item_id": "",
+    "runner": "findings",
+    "state": "submitted",
+    "version": 5,
+    "generation": 1,
+    "input_digest": "edda0a3dc3b113a58b1bca6a3149e596fc1ffadb12fa13fbd0070b153d32e5a6",
+    "inputs": [
+      {
+        "kind": "docs",
+        "resource_id": "page-1",
+        "area_id": "area-1",
+        "revision": "3",
+        "hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      }
+    ],
+    "owner_id": "dev-1",
+    "execution_location": "cloud",
+    "origin": "manual",
+    "root_id": "run-1",
+    "round": 0,
+    "cost": 0,
+    "output_contract": "findings/1",
+    "outputs": [
+      {
+        "kind": "docs",
+        "resource_id": "page-1",
+        "area_id": "area-1",
+        "revision": "3",
+        "hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      }
+    ],
+    "findings": [
+      {
+        "id": "f-1",
+        "severity": "high",
+        "description": "Cutover day differs",
+        "resolution": {
+          "choice": "target",
+          "text": "Finance confirmed",
+          "by": "dev-1",
+          "at": "2026-10-20T12:00:00Z"
+        },
+        "target": {
+          "type": "doc_page",
+          "id": "page-2",
+          "version": "4"
+        },
+        "subject_quote": "the day after its billing date",
+        "target_quote": "on its billing date",
+        "suggestion": {
+          "action": "decide",
+          "rationale": "Both pages are recent."
+        }
+      },
+      {
+        "id": "f-2",
+        "severity": "medium",
+        "description": "Refund window is out of date on page-2",
+        "target": {
+          "type": "doc_page",
+          "id": "page-2",
+          "version": "4"
+        },
+        "subject_quote": "within 30 days",
+        "target_quote": "within 14 days",
+        "suggestion": {
+          "action": "update_target",
+          "markdown_patch": "within 30 days"
+        }
+      }
+    ],
+    "recommendation": "changes_requested",
+    "summary": "One open question",
+    "policy": {
+      "require_acceptance": false,
+      "quorum": 0,
+      "max_repair_rounds": 6,
+      "max_cost": 20
+    },
+    "created_at": "2026-10-20T12:00:00Z",
+    "updated_at": "2026-10-20T12:00:00Z"
+  }
+}

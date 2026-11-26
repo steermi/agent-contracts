@@ -9,6 +9,7 @@ import (
 	"github.com/steermi/agent-contracts/activity"
 	"github.com/steermi/agent-contracts/flow"
 	"github.com/steermi/agent-contracts/skill"
+	"github.com/steermi/agent-contracts/skill/builtin"
 )
 
 func TestDefaultsPerSubject(t *testing.T) {
@@ -236,4 +237,21 @@ func TestSimulateDocPageFlow(t *testing.T) {
 	changes := simulate(r, script{"check": {"changes_requested"}}, "", 1)
 	assert.Equal(t, simApproval, changes.EndKind)
 	assert.Equal(t, "owner", changes.Ends)
+}
+
+// Where a person starts a skill (skill.Manifest.StartsFrom) does not limit
+// flow steps: a docs page flow's author places Plan on the page explicitly,
+// and pinned system:doc:1 runs keep their Plan step. Only the result
+// decides (no code skills on a page).
+func TestDocPageFlowStepsIgnoreStartsFrom(t *testing.T) {
+	plan, ok := builtin.Get(builtin.ID(activity.Answer))
+	require.True(t, ok)
+	require.NotContains(t, plan.StartsFrom(), skill.SubjectDocPage)
+	g := flow.Graph{Subject: flow.SubjectDocPage, Start: "plan", Nodes: []flow.Node{
+		{Key: "plan", Type: flow.NodeAgent, Skill: builtin.ID(activity.Answer), PageTriggers: []activity.PageTrigger{{Event: activity.PageEventUpdated, Mode: flow.ModeAsk}}},
+		{Key: "end", Type: flow.NodeEnd},
+	}, Edges: []flow.Edge{{From: "plan", To: "end", On: activity.OutcomeDone}}}
+	r, issues := g.Resolve(nil)
+	require.Empty(t, issues)
+	assert.NoError(t, r.Validate(flow.Options{}))
 }

@@ -5,7 +5,142 @@ All notable changes to this module are listed here. The format follows
 [semantic versioning](https://semver.org/) (0.x: minor versions may break the
 API).
 
-## 0.5.0 - unreleased
+## 0.6.0 - unreleased
+
+Release order: service first, then the CLI. Older CLIs keep working: they
+ignore `resolution` on a finding and the `resolve_finding` command, and the
+CLI uses none of the changed Go APIs (it builds against this version
+unchanged; `StartsFrom` is not used there).
+
+### Changed (breaking)
+
+- Docs pages are opt-in for skills: `skill.Manifest.StartsFrom` without
+  `steermi-starts-from` returns `Result.Subjects` without `doc_page` (a
+  skill written for work items or sessions read oddly on a page). Built-in Plan and Review stop starting
+  from docs pages: their `starts_from` in `skills_flows.json` loses
+  `doc_page`. Docs reconcile and Docs fix declare `doc_page`. Custom docs
+  skills add `steermi-starts-from: doc_page`. Flow steps are not limited by
+  it: a docs page flow may still place Plan (or any answer/findings skill)
+  on a page, and pinned `system:doc:1` runs keep their Plan step
+  (`flow.Graph.Resolve` checks only the result).
+- `MaxDismissalReasonRunes` is renamed `MaxFindingNoteRunes` (600): it
+  bounds every person's note on a finding, a dismissal reason and an
+  answer's text.
+- One lock rule for notes on findings: `dismiss_finding` and
+  `resolve_finding` are accepted only while the findings run is submitted
+  and nobody decided on it (no `Decision`, no `StepDecision`). Before, a
+  dismissal was also accepted on a completed run and after decisions.
+  Dismissals and answers both change what a fix applies, so they lock
+  together when the run hands off (completes) or is decided on: a fix and
+  an approval always cover the notes they saw.
+- Open questions block every command that locks the notes: while a
+  findings run has a decide finding nobody answered or dismissed
+  (`Run.OpenDecisions` > 0), `Next`, `ApplyFixes`, `Decide` of any kind,
+  `approve_step` and `request_step_changes` are refused (`ErrConflict`,
+  and left out of `AllowedCommands`), and `Run.AutoHop` has no hop, so the
+  flow advancer waits; once every question is answered or dismissed a
+  person decides or starts the hop. So no command can lock a question
+  unanswered (a decision before the answers used to leave the run stuck:
+  locked notes, hand-off refused). `cancel` is unchanged (a current
+  submission is still not withdrawn).
+- Dismissing an answered decide finding drops its answer: a finding is
+  answered or dismissed, never both.
+- A findings run that asked a person anything (any `decide` finding as
+  submitted, answered or dismissed since) never follows an auto edge:
+  `Run.AutoHop` has no hop for it, before or after the answers, so the
+  flow advancer never starts its next step; a person starts it with
+  `next` once every question is answered or dismissed. A decision at an
+  approval node (`approve_step`, `request_step_changes`) is still an
+  explicit start of the hop it chose. AutoHop reads only the findings as
+  submitted, so answering or dismissing never makes a hop automatic.
+  Hosts that relied on the last answer starting an auto hop show `next`
+  to a person instead.
+- Finding shapes, as data (`actionTargets`, `patchActions`,
+  `quotedActions` in `finding.go`): `SubmitFindings` drops a
+  `markdown_patch` on any action other than `update_target`,
+  `update_subject` and `merge_into_target` (like submitted notes, it is
+  cleared, not refused), and refuses a `decide` finding without a
+  `doc_page` or `context_entry` target or without both `subject_quote`
+  and `target_quote` (the Docs reconcile skill already promised this), and
+  a `decide` finding on a docs page run whose `doc_page` target is the
+  run's own page.
+- `Run.BindCandidate(candidate, digest, inputs) error` now returns an
+  error: it shares one pin step with `RepinSources`, which refuses an
+  empty digest or a ref that `OutputRef.Validate` rejects
+  (`ErrValidation`), leaving the run unchanged.
+
+### Added
+
+- Decide findings (testdata `resolve_finding.json`, new): suggestion action
+  `decide` (`activity.SuggestDecide`, a target action) asks a person which
+  side of a contradiction is right. `Finding.Resolution`
+  (`activity.FindingResolution`: `choice` subject/target/other, `text`,
+  `by`, `at`) holds the answer; `activity.ResolveFinding`
+  (`resolve_finding`, public; `Command.Choice`, `Command.Reason` as the
+  text) records it, owner or manager as a person, under the lock rule
+  above; answering again replaces the answer; a dismissed finding cannot
+  be answered. Resolutions are not evidence: the evidence digest and
+  fingerprints ignore them, and `SubmitFindings` clears a submitted
+  resolution. `Run.OpenDecisions` counts unanswered decisions.
+  `ResolutionChoice.Valid()` checks one.
+- What a fix applies, in the contract (hosts no longer compute it):
+  `Run.FindingsFor(page string) []Finding` (the kept findings, not
+  dismissed and decide findings only when answered, that the fix on `page`
+  applies) and `Run.LinkedFixPages() []string` (the other
+  pages a docs page check's kept findings ask to change, once each, in
+  finding order). On a docs page check of page S: `update_subject` → S;
+  `update_target` / `merge_into_target` on another page T → T; an answer
+  → the side it says is wrong (subject right → T, target right → S,
+  neither → both S and T, the only finding two fixes apply); a decision on
+  an AI rule and every finding that edits no page (follow-ups) → S. Any
+  other run's subject gets every kept finding. The `resolve_finding.json`
+  golden records `findings_for_subject` and `linked_fix_pages`.
+- `Run.LinkedFromID` / `Request.LinkedFromID` (`linked_from_id`, ≤ the new
+  `MaxRunIDBytes` = 128): a docs page run that applies findings of a run on
+  another page (a check of page A found page B wrong). A reference, not a
+  parent: only docs page runs, never the run itself. Retry and Refine keep
+  it (`SuccessorRun.LinkedFromID`, new; the same fix again), Next and
+  ApplyFixes drop it; a successor may only carry its parent's link.
+  `resolve_finding.json` records a linked fix (`linked_fix`) and its Retry
+  successor (`linked_fix_retry`), and its check gains an `update_target`
+  finding on page-2 (`findings_for_page_2`, `linked_fix_pages`).
+- `Command.Reason` is documented as the person's free text for every
+  command (a dismissal reason, an answer's text, feedback, a decision's
+  reason); no wire change.
+- `Run.RepinSources(digest, inputs) error`: replaces the pinned inputs of a
+  suggested docs page run with no predecessor before it is confirmed
+  (findings outputs follow). The inputs must still pin the subject page and
+  each ref must validate (`ErrValidation`); another run or state is
+  `ErrConflict`. Hosts re-read a docs check's related pages as the person
+  who confirms it.
+- `Run.AwaitsStart()` (suggested, or waiting with `execution_busy`),
+  `Run.AcceptsFollowUp()` (submitted, completed, failed or cancelled; a
+  waiting run resumes in its session) and `Actor.Human()` (the existing
+  "a person, not a viewer, no machine purpose" rule, now exported).
+- `CapabilitiesFor("", scope)` (the person's own Zoe chat) adds `docs_map`
+  and `find_doc_claims` (the Docs map: page digests and claims of every
+  page the person reads). Runs never get them: a run sees its pinned
+  sources only.
+- `CapabilitiesForFollowUp(subject, scope)`: the read-only tools of a
+  person's follow-up question in a stopped run's session: `get_doc_page`
+  only for a docs page run, which hosts limit to the run's own page and its
+  pinned sources (the answer lands in the run's shared session, so it reads
+  only what the run read: no listings, search or Docs map); work, docs and repository reads
+  for any other; intersected with `CapabilitiesFor("", scope)`. No write,
+  submit, command, skill, MCP or web tool. `capabilities.json` gains
+  `follow_up` per subject and scope (and the two Docs map tools under
+  `conversation` only).
+- Built-in skills 0.11.0 (`doc_page_v2.json` and `skills_flows.json`
+  change by the built-in version and the two docs skill digests;
+  `skills_flows.json` also by Plan's and Review's `starts_from`, above):
+  Docs reconcile asks with `decide` instead of guessing, is told which
+  finding shapes are refused (and that a stray patch is dropped), and writes its summary for the page owner.
+  Docs fix applies the findings its host hands it for its page
+  (`Run.FindingsFor`), reads which side the page is from the finding's
+  `target` and the answer from `resolution` only (no host-only fields),
+  and fixes a page whose check ran on another page.
+
+## 0.5.0
 
 Release order: service first, then the CLI. The CLI does not evaluate page
 triggers; it only needs the bump to build against 0.5.0.
@@ -23,7 +158,7 @@ triggers; it only needs the bump to build against 0.5.0.
   is `ask` (was `auto`), so its digest changes. Hosts rewrite stored docs page
   graphs with `auto` page triggers to `ask` before upgrading.
 
-## 0.4.0 - unreleased
+## 0.4.0
 
 Release order: service first, then the CLI. The CLI must bump with this
 release: a CLI on 0.3.1 or older does not know `review_inconclusive` or the

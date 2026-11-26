@@ -112,7 +112,7 @@ func (r Run) choiceGuard(a Actor, c Command) error {
 		if c.Type != SetStepMode && c.Type != Confirm && c.Type != Next || !c.StepMode.Valid() {
 			return ErrValidation
 		}
-		if !a.human() {
+		if !a.Human() {
 			return ErrForbidden
 		}
 		if !r.stepModeOpen() {
@@ -151,6 +151,10 @@ type SuccessorRun struct {
 	LocationChosen bool
 	StepMode       StepMode
 	Feedback       *Feedback
+	// LinkedFromID is the follow-up's Request.LinkedFromID: the run's own
+	// link for Retry and Refine (the same step again applies the same
+	// check's findings), "" for Next and ApplyFixes.
+	LinkedFromID string
 }
 
 // Feedback is a person's change request a run works from: what they asked
@@ -189,6 +193,9 @@ func (f Feedback) cleaned() (*Feedback, error) {
 
 func (r Run) successorRun(a Actor, c Command, runner Runner, hop FlowHop) SuccessorRun {
 	out := SuccessorRun{Runner: runner, Location: r.Location, StepMode: r.StepMode, Feedback: r.successorFeedback(a, c)}
+	if c.Type == Retry || c.Type == Refine {
+		out.LinkedFromID = r.LinkedFromID
+	}
 	switch {
 	case c.Type == Next && c.Location != "":
 		out.Location, out.LocationChosen = c.Location, true

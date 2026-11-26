@@ -63,10 +63,6 @@ func TestDismissFindingStates(t *testing.T) {
 	owner := Actor{UserID: "owner", Role: "member"}
 	cmd := Command{Type: DismissFinding, ExpectedVersion: 3, FindingID: "f1", Reason: "Dismissed"}
 
-	completed := submittedFindingsRun()
-	completed.State = Completed
-	require.NoError(t, completed.Apply(owner, cmd))
-
 	for name, mutate := range map[string]func(*Run){
 		"running":     func(r *Run) { r.State = Running },
 		"cancelled":   func(r *Run) { r.State = Cancelled },
@@ -98,7 +94,7 @@ func TestDismissFindingPayload(t *testing.T) {
 		"no finding":      {FindingID: "", Reason: "x"},
 		"unknown":         {FindingID: "nope", Reason: "x"},
 		"no reason":       {FindingID: "f1", Reason: "   "},
-		"reason too long": {FindingID: "f1", Reason: strings.Repeat("é", MaxDismissalReasonRunes+1)},
+		"reason too long": {FindingID: "f1", Reason: strings.Repeat("é", MaxFindingNoteRunes+1)},
 	} {
 		r := submittedFindingsRun()
 		c.Type, c.ExpectedVersion = DismissFinding, 3
@@ -106,29 +102,26 @@ func TestDismissFindingPayload(t *testing.T) {
 		assert.EqualValues(t, 3, r.Version, name)
 	}
 	r := submittedFindingsRun()
-	require.NoError(t, r.Apply(owner, Command{Type: DismissFinding, ExpectedVersion: 3, FindingID: "f1", Reason: strings.Repeat("é", MaxDismissalReasonRunes)}))
+	require.NoError(t, r.Apply(owner, Command{Type: DismissFinding, ExpectedVersion: 3, FindingID: "f1", Reason: strings.Repeat("é", MaxFindingNoteRunes)}))
 	assert.ErrorIs(t, r.Apply(owner, Command{Type: DismissFinding, ExpectedVersion: 4, FindingID: "f1", Reason: "again"}), ErrConflict, "already dismissed")
 	assert.True(t, DismissFinding.Public())
 	assert.False(t, DismissFinding.spawns())
 }
 
-// A dismissal never changes the outcome, in any state: the hop that was (or
-// will be) followed is the one the submitted findings decided. Fingerprints
-// ignore dismissals too.
+// A dismissal never changes the outcome: the hop that will be followed is
+// the one the submitted findings decided. Fingerprints ignore dismissals
+// too.
 func TestDismissFindingNeverChangesTheOutcome(t *testing.T) {
 	owner := Actor{UserID: "owner", Role: "member"}
-	for _, state := range []State{Submitted, Completed} {
-		r := submittedFindingsRun()
-		r.State = state
-		r.Flow = &FlowRef{VersionID: "v", Node: "review", Loop: &LoopState{LoopPolicy: LoopPolicy{MaxIterations: 3, StopBelow: Medium}},
-			Hops: map[Outcome]FlowHop{OutcomeChangesRequested: {Node: "build", Runner: Code, Back: true}, OutcomeApproved: {Node: "end"}}}
-		require.Equal(t, OutcomeChangesRequested, r.Outcome())
-		digest, fingerprint := r.EvidenceDigest(), Fingerprint(r.Findings)
-		require.NoError(t, r.Apply(owner, Command{Type: DismissFinding, ExpectedVersion: r.Version, FindingID: "f1", Reason: "Not a contradiction"}))
-		assert.Equal(t, OutcomeChangesRequested, r.Outcome(), state)
-		assert.Equal(t, digest, r.EvidenceDigest(), state)
-		assert.Equal(t, fingerprint, Fingerprint(r.Findings), state)
-	}
+	r := submittedFindingsRun()
+	r.Flow = &FlowRef{VersionID: "v", Node: "review", Loop: &LoopState{LoopPolicy: LoopPolicy{MaxIterations: 3, StopBelow: Medium}},
+		Hops: map[Outcome]FlowHop{OutcomeChangesRequested: {Node: "build", Runner: Code, Back: true}, OutcomeApproved: {Node: "end"}}}
+	require.Equal(t, OutcomeChangesRequested, r.Outcome())
+	digest, fingerprint := r.EvidenceDigest(), Fingerprint(r.Findings)
+	require.NoError(t, r.Apply(owner, Command{Type: DismissFinding, ExpectedVersion: r.Version, FindingID: "f1", Reason: "Not a contradiction"}))
+	assert.Equal(t, OutcomeChangesRequested, r.Outcome())
+	assert.Equal(t, digest, r.EvidenceDigest())
+	assert.Equal(t, fingerprint, Fingerprint(r.Findings))
 }
 
 // Only people dismiss: a submitted dismissal reason is cleared (older
@@ -157,14 +150,4 @@ func openFindingCount(r Run) int {
 		}
 	}
 	return n
-}
-
-func TestDismissFindingKeepsDecisions(t *testing.T) {
-	owner := Actor{UserID: "owner", Role: "member"}
-	reviewer := Actor{UserID: "reviewer", Role: "member"}
-	r := submittedFindingsRun()
-	require.NoError(t, r.Apply(reviewer, Command{Type: Decide, ExpectedVersion: 3, Decision: Accept, EvidenceDigest: r.EvidenceDigest()}))
-	require.True(t, r.HumanAccepted())
-	require.NoError(t, r.Apply(owner, Command{Type: DismissFinding, ExpectedVersion: r.Version, FindingID: "f2", Reason: "Applied"}))
-	assert.True(t, r.HumanAccepted(), "a dismissal does not invalidate decisions")
 }

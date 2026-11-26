@@ -86,7 +86,7 @@
   },
   "skills": {
     "steermi:docs-fix": {
-      "digest": "f1632a2a2e08b264294b2c3306845564875cf369b21ba475f0226117b4a7d250",
+      "digest": "e5ea63f6bd7421f5d1187d2539800822a5d88d6adc99859ae3852f5985cf3000",
       "effort": "",
       "required": false,
       "result": "answer",
@@ -97,7 +97,7 @@
       ]
     },
     "steermi:docs-reconcile": {
-      "digest": "7a972c3968b0f34b1383b9ee4ae23bbaf45cc69fe4ea469b99c1b0d492f3a427",
+      "digest": "b2e908adbea1cce38f0f11c30e8c8f05b13e6b59f56cc9b1df89d13a4081ad8a",
       "effort": "medium",
       "required": false,
       "result": "findings",

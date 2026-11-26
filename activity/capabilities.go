@@ -37,6 +37,12 @@ func CapabilitiesFor(runner Runner, scope string) CapabilitySet {
 		// Initiatives span teams: only the person's own chat reads them;
 		// delegated run credentials stay inside their run's scope.
 		s["get_initiative"] = true
+		// The Docs map (page digests and claims across every area the
+		// person reads) is for the person's own chat only: runs see their
+		// pinned sources, so what they write never carries text from pages
+		// their readers cannot read.
+		s["docs_map"] = true
+		s["find_doc_claims"] = true
 	}
 	if runner == Answer || runner == Code {
 		s["submit_activity_outputs"] = true
@@ -54,10 +60,12 @@ func CapabilitiesFor(runner Runner, scope string) CapabilitySet {
 }
 
 // CapabilitiesForDocPage is the allowlist of a docs page run: read the page
-// and its area, research, and hand back. Answer may write a new version of
-// the page (the host only admits the subject page); findings only submit
-// findings. No work item, sprint, cycle or comment tools. Unknown runners get
-// none.
+// and its area, research, and hand back. No Docs map tools: a page run sees
+// its pinned sources only (the host pins related pages, claims included), so
+// what it writes never carries text from pages its readers cannot read.
+// Answer may write a new version of the page (the host only admits the
+// subject page); findings only submit findings. No work item, sprint, cycle
+// or comment tools. Unknown runners get none.
 func CapabilitiesForDocPage(runner Runner) CapabilitySet {
 	s := CapabilitySet{}
 	if runner != Answer && runner != Findings {
@@ -88,4 +96,49 @@ func CapabilitiesForMeeting() CapabilitySet {
 	result["propose_meeting_artifact"] = true
 	result["request_meeting_changes_review"] = true
 	return result
+}
+
+// Follow-up read tools per subject (CapabilitiesForFollowUp).
+var (
+	// followUpDocsReadTools: a docs page run's pages, read as the person.
+	// A follow-up answer lands in the run's session, which other readers of
+	// the page see, so it reads what the run read and nothing else: hosts
+	// admit get_doc_page only for the run's own page and its pinned
+	// sources (the pages its findings already cite). No area or page
+	// listing, search or Docs map: they reach pages those readers may not
+	// see.
+	followUpDocsReadTools = []string{"get_doc_page"}
+	// followUpWorkReadTools: work items, comments, links, cycles, docs and
+	// repository reads, read as the person.
+	followUpWorkReadTools = []string{
+		"get_work_item", "list_work_items", "list_comments", "get_linked_work_items",
+		"get_work_item_children", "get_work_item_links", "get_team_info", "list_sprints",
+		"get_sprint_burndown", "search", "get_context",
+		"get_doc_page", "get_doc_area", "list_doc_pages", "list_doc_areas",
+		"read_file", "list_directory", "search_files", "search_file_contents",
+		"list_branches", "get_commit_log", "get_diff", "list_repositories",
+	}
+)
+
+// CapabilitiesForFollowUp is the tool set of a person's follow-up question
+// in a stopped run's session (Run.AcceptsFollowUp): the subject's read-only
+// tools (get_doc_page for a docs page run, limited by the host to the run's own
+// page and pinned sources; work, docs and
+// repository reads for any other), intersected with what the person's own
+// chat in scope may use (CapabilitiesFor("", scope)), since the turn reads
+// as the person. Nothing in it writes, submits, commands a run, calls a
+// skill, MCP or the web; an unknown scope gets none.
+func CapabilitiesForFollowUp(subject SubjectKind, scope string) CapabilitySet {
+	list := followUpWorkReadTools
+	if subject == SubjectDocPage {
+		list = followUpDocsReadTools
+	}
+	person := CapabilitiesFor("", scope)
+	s := CapabilitySet{}
+	for _, name := range list {
+		if person.Allows(name) {
+			s[name] = true
+		}
+	}
+	return s
 }

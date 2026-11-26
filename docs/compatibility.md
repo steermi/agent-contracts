@@ -11,13 +11,15 @@ older CLI against a newer service. The rules below keep that safe.
 | JSON field names of `Run`, `Command`, `OutputRef`, `Check`, `Decision` | `testdata/compat/wire.json` |
 | `Digest` / `Run.EvidenceDigest` output for the same input | `testdata/compat/wire.json` |
 | Commands an API caller may send (`CommandType.Public`) | `testdata/compat/wire.json` |
-| Capability allowlist per runner and scope, for meetings and for docs page runs | `testdata/compat/capabilities.json` |
+| Capability allowlist per runner and scope, for meetings, for docs page runs and for follow-up questions in a stopped run's session | `testdata/compat/capabilities.json` |
 | Runner scopes, locations and identity digest | `testdata/compat/definitions.json` |
 | Built-in skill digests and the default flow | `testdata/compat/skills_flows.json` |
 | Docs page runs, findings with a target and the first docs page flow (`system:doc:1`) | `testdata/compat/doc_page.json` |
 | The default docs page flow (`system:doc:2`) and the docs skills | `testdata/compat/doc_page_v2.json` |
 | Findings dropped by the host (`dropped_findings`) | `testdata/compat/dropped_findings.json` |
 | Dismissing a finding (`dismiss_finding`) | `testdata/compat/dismiss_finding.json` |
+| Answering a decide finding (`resolve_finding`), which fix applies it (`Run.FindingsFor`, `Run.LinkedFixPages`) | `testdata/compat/resolve_finding.json` |
+| Linked fix runs on another page (`linked_from_id`) and a Retry successor that keeps the link | `testdata/compat/resolve_finding.json` (`linked_fix`, `linked_fix_retry`) |
 | Flow assignment attribution on flow refs (`rule`, `arm`) | `testdata/compat/flow_attribution.json` |
 | Approval nodes with edges: `approver`, pinned decision hops, `approve_step` / `request_step_changes`, `step_decisions`, the successor's `feedback` object | `testdata/compat/approval.json` |
 | Launch IDs, secret hashing, PKCE S256, branch names | `testdata/compat/locallaunch.json` and RFC 7636 vector in `compat_test.go` |

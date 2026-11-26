@@ -81,8 +81,16 @@ func TestCompatCapabilities(t *testing.T) {
 			caps[name][scope] = sorted(activity.CapabilitiesFor(k, scope))
 		}
 	}
+	followUp := map[string]map[string][]string{}
+	for _, subject := range []activity.SubjectKind{activity.SubjectWorkItem, activity.SubjectSession, activity.SubjectDocPage} {
+		followUp[string(subject)] = map[string][]string{}
+		for _, scope := range scopes {
+			followUp[string(subject)][scope] = sorted(activity.CapabilitiesForFollowUp(subject, scope))
+		}
+	}
 	golden(t, "capabilities", map[string]any{"runners": caps, "meeting": sorted(activity.CapabilitiesForMeeting()),
-		"doc_page": map[string][]string{"answer": sorted(activity.CapabilitiesForDocPage(activity.Answer)), "findings": sorted(activity.CapabilitiesForDocPage(activity.Findings))}})
+		"doc_page":  map[string][]string{"answer": sorted(activity.CapabilitiesForDocPage(activity.Answer)), "findings": sorted(activity.CapabilitiesForDocPage(activity.Findings))},
+		"follow_up": followUp})
 }
 
 func TestCompatCapabilityDenials(t *testing.T) {
@@ -407,6 +415,77 @@ func TestCompatDismissFinding(t *testing.T) {
 		"run":              r,
 		"evidence_digest":  r.EvidenceDigest(),
 		"allowed_commands": r.AllowedCommands(owner, activity.HostFacts{}),
+	})
+}
+
+// A person answers a decide finding of a docs page findings run
+// (resolve_finding): the command's wire shape, the run with the resolution
+// (its time pinned) and its evidence digest, which equals the digest before;
+// which fix applies each finding; and a linked fix on another page
+// (linked_from_id) whose Retry keeps the link.
+func TestCompatResolveFinding(t *testing.T) {
+	owner := activity.Actor{OrgID: "org-1", UserID: "dev-1", Role: "member"}
+	subject := activity.Subject{Kind: activity.SubjectDocPage, ID: "page-1", ScopeType: "organization", ScopeID: "org-1"}
+	r, err := activity.NewRun("run-1", "org-1", "", "", owner, activity.Request{
+		Runner: activity.Findings, Location: activity.Cloud, InputDigest: activity.Digest("page-1@3"), Subject: subject,
+		Inputs: []activity.OutputRef{docs}, CommandKey: "cmd-1", Origin: "manual",
+	}, nil)
+	require.NoError(t, err)
+	r.CreatedAt, r.UpdatedAt = at, at
+	require.NoError(t, r.Apply(owner, activity.Command{Type: activity.Confirm, ExpectedVersion: r.Version}))
+	require.NoError(t, r.Apply(owner, activity.Command{Type: activity.Start, ExpectedVersion: r.Version}))
+	require.NoError(t, r.Apply(owner, activity.Command{Type: activity.SubmitFindings, ExpectedVersion: r.Version, Summary: "One open question",
+		Recommendation: activity.ChangesRequested, Findings: []activity.Finding{{
+			ID: "f-1", Severity: activity.High, Description: "Cutover day differs",
+			Target:       &activity.FindingTarget{Type: activity.FindingTargetDocPage, ID: "page-2", Version: "4"},
+			SubjectQuote: "the day after its billing date", TargetQuote: "on its billing date",
+			Suggestion: &activity.FindingSuggestion{Action: activity.SuggestDecide, Rationale: "Both pages are recent."},
+		}, {
+			ID: "f-2", Severity: activity.Medium, Description: "Refund window is out of date on page-2",
+			Target:       &activity.FindingTarget{Type: activity.FindingTargetDocPage, ID: "page-2", Version: "4"},
+			SubjectQuote: "within 30 days", TargetQuote: "within 14 days",
+			Suggestion: &activity.FindingSuggestion{Action: activity.SuggestUpdateTarget, MarkdownPatch: "within 30 days"},
+		}}}))
+	before := r.EvidenceDigest()
+	cmd := activity.Command{Type: activity.ResolveFinding, CommandKey: "cmd-5", ExpectedVersion: r.Version, FindingID: "f-1", Choice: activity.ResolveTarget, Reason: "Finance confirmed"}
+	require.NoError(t, r.Apply(owner, cmd))
+	r.UpdatedAt = at
+	r.Findings[0].Resolution.At = at
+	require.Equal(t, before, r.EvidenceDigest())
+
+	// f-2 asks to change page-2: a linked fix on page-2 applies it
+	// (linked_from_id = the check). It fails; its Retry keeps the link.
+	page2 := activity.OutputRef{Kind: activity.RefDocs, ResourceID: "page-2", AreaID: "area-1", Revision: "4", Hash: hash}
+	fixRequest := activity.Request{
+		Runner: activity.Answer, Location: activity.Cloud, InputDigest: activity.Digest("page-2@4"), Inputs: []activity.OutputRef{page2},
+		Subject:    activity.Subject{Kind: activity.SubjectDocPage, ID: "page-2", ScopeType: "organization", ScopeID: "org-1"},
+		CommandKey: "cmd-6", Origin: "docs", LinkedFromID: r.ID,
+	}
+	fix, err := activity.NewRun("fix-1", "org-1", "", "", owner, fixRequest, nil)
+	require.NoError(t, err)
+	for _, c := range []activity.CommandType{activity.Confirm, activity.Start, activity.Fail} {
+		require.NoError(t, fix.Apply(owner, activity.Command{Type: c, ExpectedVersion: fix.Version}))
+	}
+	fix.CreatedAt, fix.UpdatedAt = at, at
+	retry, err := fix.Successor(owner, activity.Command{Type: activity.Retry, ExpectedVersion: fix.Version})
+	require.NoError(t, err)
+	fixRequest.CommandKey, fixRequest.LinkedFromID = "cmd-7", retry.LinkedFromID
+	retried, err := activity.NewRun("fix-2", "org-1", "", "", owner, fixRequest, &fix)
+	require.NoError(t, err)
+	retried.CreatedAt, retried.UpdatedAt = at, at
+	golden(t, "resolve_finding", map[string]any{
+		"command":          cmd,
+		"run":              r,
+		"evidence_digest":  r.EvidenceDigest(),
+		"open_decisions":   r.OpenDecisions(),
+		"allowed_commands": r.AllowedCommands(owner, activity.HostFacts{}),
+		// The answer says page-2 is right: the fix on page-1 applies f-1;
+		// f-2 goes to page-2's linked fix.
+		"findings_for_subject": r.FindingsFor("page-1"),
+		"findings_for_page_2":  r.FindingsFor("page-2"),
+		"linked_fix_pages":     r.LinkedFixPages(),
+		"linked_fix":           fix,
+		"linked_fix_retry":     retried,
 	})
 }
 
